@@ -4,6 +4,7 @@ from .activity_event import ActivityEvent
 from .digest import Digest
 from .blocker import Blocker
 from .integration import Integration
+from .dep_conflict import DepConflict
 
 __all__ = [
     "Organization",
@@ -12,4 +13,5 @@ __all__ = [
     "Digest",
     "Blocker",
     "Integration",
+    "DepConflict",
 ]

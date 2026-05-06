@@ -7,6 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..config import get_settings
+from ..core.encryption import decrypt_token
 from ..database import get_db
 from ..models.developer import Developer
 from ..models.integration import Integration
@@ -64,7 +65,7 @@ async def poll_github_for_org(org_id: str) -> None:
 
     async with httpx.AsyncClient(
         headers={
-            "Authorization": f"token {integration.access_token}",
+            "Authorization": f"token {decrypt_token(integration.access_token)}",
             "Accept": "application/vnd.github+json",
             "X-GitHub-Api-Version": "2022-11-28",
         },

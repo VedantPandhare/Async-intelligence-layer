@@ -19,9 +19,9 @@ ENV/
 .env.local
 .env.*.local
 
-# Alembic
-migrations/versions/*.py
-!migrations/versions/__init__.py
+# Alembic — commit all migration files
+# (only exclude auto-generated __pycache__ inside migrations)
+migrations/__pycache__/
 
 # Node / Next.js
 node_modules/
