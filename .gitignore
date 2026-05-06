@@ -1,0 +1,49 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+.venv/
+venv/
+env/
+ENV/
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+
+# Alembic
+migrations/versions/*.py
+!migrations/versions/__init__.py
+
+# Node / Next.js
+node_modules/
+.next/
+out/
+frontend/dist/
+
+# OS
+.DS_Store
+Thumbs.db
+*.log
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Docker
+*.override.yml
+
+# Test / coverage
+.pytest_cache/
+.coverage
+htmlcov/
