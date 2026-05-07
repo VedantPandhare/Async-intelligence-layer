@@ -5,10 +5,13 @@ import uuid
 from fastapi import APIRouter, Request
 from sqlalchemy import select
 
+from ...core.logging import get_logger
 from ...database import get_db
 from ...ingestion.embedder import embed_and_store_event
 from ...ingestion.normalizer import normalize_jira_issue, store_event
 from ...models.developer import Developer
+
+logger = get_logger(__name__)
 
 router = APIRouter(tags=["webhooks"])
 
@@ -50,6 +53,6 @@ async def jira_webhook(org_id: str, request: Request):
         try:
             await embed_and_store_event(event, record.id, db)
         except Exception as exc:
-            print(f"[jira_webhook] embed failed: {exc}")
+            logger.warning("embed failed", extra={"event_id": str(record.id), "error": str(exc)})
 
     return {"status": "ok"}

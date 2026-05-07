@@ -8,18 +8,23 @@ from slowapi.middleware import SlowAPIMiddleware
 from slowapi.util import get_remote_address
 
 from .api.router import router
+from .core.logging import configure_logging, get_logger
 from .database import init_db
 from .scheduler.runner import scheduler
 
 limiter = Limiter(key_func=get_remote_address, default_limits=["200/minute"])
+logger = get_logger(__name__)
 
 
 @asynccontextmanager
-async def lifespan(app: FastAPI):
+async def lifespan(_app: FastAPI):
+    configure_logging()
     await init_db()
     scheduler.start()
+    logger.info("startup complete", extra={"scheduler_running": scheduler.running})
     yield
     scheduler.shutdown(wait=False)
+    logger.info("shutdown complete")
 
 
 app = FastAPI(

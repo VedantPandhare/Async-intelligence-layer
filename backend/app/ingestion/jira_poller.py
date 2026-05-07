@@ -7,6 +7,7 @@ import httpx
 from sqlalchemy import select
 
 from ..core.encryption import decrypt_token
+from ..core.logging import get_logger
 from ..database import get_db
 from ..models.developer import Developer
 from ..models.integration import Integration
@@ -15,6 +16,7 @@ from .embedder import embed_and_store_event
 from .normalizer import normalize_jira_issue, store_event
 from .retry import with_retry
 
+logger = get_logger(__name__)
 JIRA_API = "https://api.atlassian.com"
 
 
@@ -29,7 +31,7 @@ async def poll_all_orgs_jira() -> None:
         try:
             await poll_jira_for_org(str(integration.org_id))
         except Exception as exc:
-            print(f"[jira_poller] org {integration.org_id} failed: {exc}")
+            logger.warning("jira poll failed", extra={"org_id": str(integration.org_id), "error": str(exc)})
 
 
 async def poll_jira_for_org(org_id: str) -> None:
@@ -111,7 +113,7 @@ async def _poll_developer_issues(
                 try:
                     await embed_and_store_event(event, record.id, db)
                 except Exception as exc:
-                    print(f"[jira_poller] embed failed: {exc}")
+                    logger.warning("embed failed", extra={"event_id": str(record.id), "error": str(exc)})
 
     except Exception as exc:
-        print(f"[jira_poller] failed for {dev.jira_account_id}: {exc}")
+        logger.warning("jira issues fetch failed", extra={"jira_account_id": dev.jira_account_id, "error": str(exc)})

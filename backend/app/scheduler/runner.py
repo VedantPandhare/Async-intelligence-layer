@@ -3,7 +3,7 @@ from datetime import date
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
-from .jobs import github_poll_job, jira_poll_job, slack_poll_job
+from .jobs import github_poll_job, jira_poll_job, retention_cleanup_job, slack_poll_job
 
 scheduler = AsyncIOScheduler(timezone="UTC")
 
@@ -12,6 +12,8 @@ def start_scheduler() -> None:
     scheduler.add_job(github_poll_job, "interval", minutes=15, id="github_poller", replace_existing=True)
     scheduler.add_job(slack_poll_job, "interval", minutes=15, id="slack_poller", replace_existing=True)
     scheduler.add_job(jira_poll_job, "interval", minutes=15, id="jira_poller", replace_existing=True)
+    # Nightly at 03:00 UTC — runs after all digests have been sent
+    scheduler.add_job(retention_cleanup_job, "cron", hour=3, minute=0, id="retention_cleanup", replace_existing=True)
     scheduler.start()
 
 
@@ -54,8 +56,12 @@ async def schedule_digest_for_org(org_id: str, digest_time: str, timezone: str) 
             db.add(digest)
 
         if result.get("final_digest"):
+            from ..delivery.block_kit import build_digest_blocks
             from ..delivery.slack_delivery import send_digest_to_channel
-            slack_ts = await send_digest_to_channel(org_id, result["final_digest"])
+            blocks = build_digest_blocks(result)
+            slack_ts = await send_digest_to_channel(
+                org_id, result["final_digest"], blocks=blocks
+            )
             if slack_ts:
                 # Update the digest row with the Slack thread timestamp
                 async with get_db() as db:

@@ -36,11 +36,16 @@ class Settings(BaseSettings):
     jira_client_id: str = ""
     jira_client_secret: str = ""
 
+    # Email (SendGrid)
+    sendgrid_api_key: str = ""
+    email_from: str = "digest@standup.ai"
+
     # App
     secret_key: str = "dev-secret-key-change-in-production"
     encryption_key: str = ""
     jwt_secret: str = "dev-jwt-secret"
     environment: str = "development"
+    event_retention_days: int = 90
 
 
 @lru_cache

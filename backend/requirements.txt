@@ -22,3 +22,5 @@ python-jose[cryptography]==3.3.0
 slack-sdk==3.27.1
 PyGithub==2.3.0
 slowapi==0.1.9
+sendgrid==6.11.0
+python-json-logger==2.0.7

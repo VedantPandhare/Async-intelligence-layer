@@ -10,11 +10,14 @@ from slack_sdk.web.async_client import AsyncWebClient
 from sqlalchemy import select
 
 from ..core.encryption import decrypt_token
+from ..core.logging import get_logger
 from ..database import get_db
 from ..models.developer import Developer
 from ..models.integration import Integration
 from .embedder import embed_and_store_event
 from .normalizer import normalize_slack_message, store_event
+
+logger = get_logger(__name__)
 
 
 async def poll_all_orgs_slack() -> None:
@@ -28,7 +31,7 @@ async def poll_all_orgs_slack() -> None:
         try:
             await poll_slack_for_org(str(integration.org_id))
         except Exception as exc:
-            print(f"[slack_poller] org {integration.org_id} failed: {exc}")
+            logger.warning("slack poll failed", extra={"org_id": str(integration.org_id), "error": str(exc)})
 
 
 async def poll_slack_for_org(org_id: str) -> None:
@@ -82,7 +85,7 @@ async def _get_channels(client: AsyncWebClient) -> list[dict]:
         )
         return resp.get("channels", [])
     except Exception as exc:
-        print(f"[slack_poller] conversations_list failed: {exc}")
+        logger.warning("conversations_list failed", extra={"error": str(exc)})
         return []
 
 
@@ -103,7 +106,7 @@ async def _poll_channel(
             limit=200,
         )
     except Exception as exc:
-        print(f"[slack_poller] conversations_history failed for #{channel_name}: {exc}")
+        logger.warning("conversations_history failed", extra={"channel": channel_name, "error": str(exc)})
         return
 
     messages = resp.get("messages", [])
@@ -126,4 +129,4 @@ async def _poll_channel(
                 record = await store_event(event, db)
                 await embed_and_store_event(event, record.id, db)
         except Exception as exc:
-            print(f"[slack_poller] store failed for user {user_id}: {exc}")
+            logger.warning("store/embed failed", extra={"user_id": user_id, "error": str(exc)})

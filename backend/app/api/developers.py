@@ -6,6 +6,7 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ..core.security import get_current_org
 from ..database import get_db_dep
 from ..models.activity_event import ActivityEvent
 from ..models.developer import Developer
@@ -24,7 +25,10 @@ class DeveloperCreate(BaseModel):
 
 @router.post("/{org_id}", status_code=201)
 async def create_developer(
-    org_id: str, payload: DeveloperCreate, db: AsyncSession = Depends(get_db_dep)
+    org_id: str,
+    payload: DeveloperCreate,
+    db: AsyncSession = Depends(get_db_dep),
+    _: str = Depends(get_current_org),
 ):
     dev = Developer(
         id=uuid.uuid4(),
@@ -78,6 +82,34 @@ async def get_developer(org_id: str, dev_id: str, db: AsyncSession = Depends(get
     }
 
 
+@router.patch("/{org_id}/{dev_id}/opt-out", status_code=200)
+async def opt_out(
+    org_id: str,
+    dev_id: str,
+    db: AsyncSession = Depends(get_db_dep),
+    _: str = Depends(get_current_org),
+):
+    """Privacy control: exclude this developer from signal collection and digest generation."""
+    dev = await _get_dev(org_id, dev_id, db)
+    dev.is_active = False
+    await db.flush()
+    return {"status": "opted_out", "developer_id": dev_id}
+
+
+@router.patch("/{org_id}/{dev_id}/opt-in", status_code=200)
+async def opt_in(
+    org_id: str,
+    dev_id: str,
+    db: AsyncSession = Depends(get_db_dep),
+    _: str = Depends(get_current_org),
+):
+    """Re-enable a developer who previously opted out."""
+    dev = await _get_dev(org_id, dev_id, db)
+    dev.is_active = True
+    await db.flush()
+    return {"status": "opted_in", "developer_id": dev_id}
+
+
 @router.get("/{org_id}/{dev_id}/timeline")
 async def developer_timeline(
     org_id: str,
@@ -108,3 +140,16 @@ async def developer_timeline(
         }
         for e in events
     ]
+
+
+async def _get_dev(org_id: str, dev_id: str, db: AsyncSession) -> Developer:
+    result = await db.execute(
+        select(Developer).where(
+            Developer.id == uuid.UUID(dev_id),
+            Developer.org_id == uuid.UUID(org_id),
+        )
+    )
+    dev = result.scalar_one_or_none()
+    if not dev:
+        raise HTTPException(status_code=404, detail="Developer not found")
+    return dev

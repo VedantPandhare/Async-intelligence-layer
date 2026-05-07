@@ -5,6 +5,10 @@ from typing import Any, Callable
 
 import httpx
 
+from ..core.logging import get_logger
+
+logger = get_logger(__name__)
+
 
 RETRYABLE_STATUS = {429, 500, 502, 503, 504}
 MAX_ATTEMPTS = 4
@@ -31,16 +35,15 @@ async def with_retry(
             resp: httpx.Response = await fn(*args, **kwargs)
 
             if resp.status_code == 429:
-                # Respect Retry-After header if present
                 retry_after = int(resp.headers.get("Retry-After", 0))
                 delay = max(retry_after, _backoff(attempt))
-                print(f"[retry] 429 rate-limited — waiting {delay}s (attempt {attempt + 1})")
+                logger.warning("rate limited", extra={"delay": delay, "attempt": attempt + 1})
                 await asyncio.sleep(delay)
                 continue
 
             if resp.status_code in RETRYABLE_STATUS:
                 delay = _backoff(attempt)
-                print(f"[retry] HTTP {resp.status_code} — retrying in {delay}s (attempt {attempt + 1})")
+                logger.warning("retryable error", extra={"status": resp.status_code, "delay": delay, "attempt": attempt + 1})
                 await asyncio.sleep(delay)
                 continue
 
@@ -49,7 +52,7 @@ async def with_retry(
         except (httpx.ConnectError, httpx.TimeoutException, httpx.RemoteProtocolError) as exc:
             last_exc = exc
             delay = _backoff(attempt)
-            print(f"[retry] {type(exc).__name__} — retrying in {delay}s (attempt {attempt + 1})")
+            logger.warning("network error", extra={"exc_type": type(exc).__name__, "delay": delay, "attempt": attempt + 1})
             await asyncio.sleep(delay)
 
     raise last_exc or RuntimeError("Max retry attempts exceeded")

@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..config import get_settings
 from ..core.encryption import decrypt_token
+from ..core.logging import get_logger
 from ..database import get_db
 from ..models.developer import Developer
 from ..models.integration import Integration
@@ -21,6 +22,7 @@ from .normalizer import (
 )
 
 settings = get_settings()
+logger = get_logger(__name__)
 
 GITHUB_API = "https://api.github.com"
 
@@ -37,7 +39,7 @@ async def poll_all_orgs() -> None:
         try:
             await poll_github_for_org(str(integration.org_id))
         except Exception as exc:
-            print(f"[poller] org {integration.org_id} failed: {exc}")
+            logger.warning("github poll failed", extra={"org_id": str(integration.org_id), "error": str(exc)})
 
 
 async def poll_github_for_org(org_id: str) -> None:
@@ -120,7 +122,7 @@ async def _poll_developer(
                     cr_payload["repo"] = event.get("repo", {}).get("name", "")
                     events.append(normalize_github_ci_run(cr_payload, dev_id, org_id))
     except Exception as exc:
-        print(f"[poller] events fetch failed for {dev.github_username}: {exc}")
+        logger.warning("github events fetch failed", extra={"username": dev.github_username, "error": str(exc)})
 
     if not events:
         return
@@ -131,4 +133,4 @@ async def _poll_developer(
             try:
                 await embed_and_store_event(event, record.id, db)
             except Exception as exc:
-                print(f"[embedder] failed for event {record.id}: {exc}")
+                logger.warning("embed failed", extra={"event_id": str(record.id), "error": str(exc)})

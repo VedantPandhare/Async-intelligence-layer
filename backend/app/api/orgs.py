@@ -1,11 +1,10 @@
 import uuid
-from datetime import date
-
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ..core.security import get_current_org
 from ..database import get_db_dep
 from ..models.organization import Organization
 from ..scheduler.runner import schedule_digest_for_org
@@ -65,7 +64,10 @@ async def get_settings(org_id: str, db: AsyncSession = Depends(get_db_dep)):
 
 @router.patch("/{org_id}/settings")
 async def update_settings(
-    org_id: str, payload: OrgSettings, db: AsyncSession = Depends(get_db_dep)
+    org_id: str,
+    payload: OrgSettings,
+    db: AsyncSession = Depends(get_db_dep),
+    _: str = Depends(get_current_org),
 ):
     result = await db.execute(select(Organization).where(Organization.id == uuid.UUID(org_id)))
     org = result.scalar_one_or_none()
@@ -88,3 +90,14 @@ async def update_settings(
     await schedule_digest_for_org(org_id, dt, tz)
 
     return {"status": "updated"}
+
+
+@router.post("/{org_id}/retention/run", status_code=202)
+async def trigger_retention(
+    org_id: str,
+    _: str = Depends(get_current_org),
+):
+    """Manually trigger the 90-day retention cleanup scoped to this org."""
+    from ..scheduler.retention import run_retention_cleanup
+    counts = await run_retention_cleanup(org_id=org_id)
+    return {"status": "ok", "deleted": counts}

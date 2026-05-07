@@ -9,6 +9,7 @@ from fastapi import APIRouter, Header, HTTPException, Request
 from sqlalchemy import select
 
 from ...config import get_settings
+from ...core.logging import get_logger
 from ...database import get_db
 from ...ingestion.embedder import embed_and_store_event
 from ...ingestion.normalizer import normalize_slack_message, store_event
@@ -16,6 +17,7 @@ from ...models.developer import Developer
 
 router = APIRouter(tags=["webhooks"])
 settings = get_settings()
+logger = get_logger(__name__)
 
 
 def _verify_slack_signature(
@@ -104,6 +106,6 @@ async def slack_webhook(
         try:
             await embed_and_store_event(normalized, record.id, db)
         except Exception as exc:
-            print(f"[slack_webhook] embed failed: {exc}")
+            logger.warning("embed failed", extra={"event_id": str(record.id), "error": str(exc)})
 
     return {"status": "ok"}

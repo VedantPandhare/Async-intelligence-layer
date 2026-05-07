@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..agents.graph import pipeline
 from ..agents.persist import persist_pipeline_results
+from ..core.security import get_current_org
 from ..database import get_db_dep
 from ..models.digest import Digest
 
@@ -55,7 +56,11 @@ async def get_today_digest(org_id: str, db: AsyncSession = Depends(get_db_dep)):
 
 
 @router.post("/{org_id}/trigger", status_code=202)
-async def trigger_digest(org_id: str, db: AsyncSession = Depends(get_db_dep)):
+async def trigger_digest(
+    org_id: str,
+    db: AsyncSession = Depends(get_db_dep),
+    _: str = Depends(get_current_org),
+):
     """Manually kick off the LangGraph pipeline for testing."""
     initial_state = {
         "org_id": org_id,
@@ -71,7 +76,6 @@ async def trigger_digest(org_id: str, db: AsyncSession = Depends(get_db_dep)):
     }
     result = await pipeline.ainvoke(initial_state)
 
-    # Persist blockers and dep_conflicts inferred by the pipeline
     await persist_pipeline_results(result)
 
     digest = Digest(
@@ -117,7 +121,11 @@ async def list_blockers(org_id: str, db: AsyncSession = Depends(get_db_dep)):
 
 
 @router.patch("/blockers/{blocker_id}/resolve")
-async def resolve_blocker(blocker_id: str, db: AsyncSession = Depends(get_db_dep)):
+async def resolve_blocker(
+    blocker_id: str,
+    db: AsyncSession = Depends(get_db_dep),
+    _: str = Depends(get_current_org),
+):
     from datetime import datetime, timezone
     from ..models.blocker import Blocker
     result = await db.execute(select(Blocker).where(Blocker.id == uuid.UUID(blocker_id)))

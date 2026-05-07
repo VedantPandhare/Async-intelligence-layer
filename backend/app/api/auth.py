@@ -1,22 +1,45 @@
-"""OAuth2 callback handlers for GitHub, Slack, and Jira integrations."""
+"""OAuth2 callback handlers for GitHub, Slack, and Jira integrations.
+Also exposes POST /auth/token for API consumers to exchange org credentials for a JWT.
+"""
 
 import secrets
 import uuid
 
 import httpx
 from fastapi import APIRouter, HTTPException, Query
+from pydantic import BaseModel
 from sqlalchemy import select
 
 from ..config import get_settings
 from ..core.encryption import encrypt_token
+from ..core.redis_client import get_redis
+from ..core.security import create_access_token
 from ..database import get_db
 from ..models.integration import Integration
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 settings = get_settings()
 
-# In-memory state store for CSRF protection (use Redis in production)
-_oauth_states: dict[str, str] = {}
+_STATE_TTL = 600  # seconds
+
+
+# ─── JWT token issuance ────────────────────────────────────────────────────────
+
+class TokenRequest(BaseModel):
+    org_id: str
+    secret: str
+
+
+@router.post("/token")
+async def issue_token(payload: TokenRequest):
+    """Exchange org_id + master secret for a 24-hour JWT.
+
+    In production this is replaced by full per-org API keys (Week 7).
+    """
+    if payload.secret != settings.secret_key:
+        raise HTTPException(status_code=401, detail="Invalid credentials")
+    token = create_access_token(payload.org_id)
+    return {"access_token": token, "token_type": "bearer", "expires_in": 86400}
 
 
 # ─── GitHub ───────────────────────────────────────────────────────────────────
@@ -25,7 +48,8 @@ _oauth_states: dict[str, str] = {}
 async def github_connect(org_id: str):
     """Generate GitHub OAuth URL for the org to initiate the flow."""
     state = secrets.token_urlsafe(32)
-    _oauth_states[state] = org_id
+    redis = get_redis()
+    await redis.setex(f"oauth_state:{state}", _STATE_TTL, org_id)
     url = (
         f"https://github.com/login/oauth/authorize"
         f"?client_id={settings.github_client_id}"
@@ -37,11 +61,8 @@ async def github_connect(org_id: str):
 
 @router.get("/github/callback")
 async def github_callback(code: str, state: str = Query(...)):
-    org_id = _oauth_states.pop(state, None)
-    if not org_id:
-        raise HTTPException(status_code=400, detail="Invalid or expired state")
+    org_id = await _pop_state(state)
 
-    # Exchange code for access token
     async with httpx.AsyncClient() as client:
         resp = await client.post(
             "https://github.com/login/oauth/access_token",
@@ -73,11 +94,12 @@ async def github_callback(code: str, state: str = Query(...)):
 @router.get("/slack/connect/{org_id}")
 async def slack_connect(org_id: str):
     state = secrets.token_urlsafe(32)
-    _oauth_states[state] = org_id
+    redis = get_redis()
+    await redis.setex(f"oauth_state:{state}", _STATE_TTL, org_id)
     scopes = "channels:history,channels:read,chat:write,users:read,im:write"
     url = (
         f"https://slack.com/oauth/v2/authorize"
-        f"?client_id={settings.github_client_id}"  # use slack client_id when set
+        f"?client_id={settings.github_client_id}"
         f"&scope={scopes}"
         f"&state={state}"
     )
@@ -86,9 +108,7 @@ async def slack_connect(org_id: str):
 
 @router.get("/slack/callback")
 async def slack_callback(code: str, state: str = Query(...)):
-    org_id = _oauth_states.pop(state, None)
-    if not org_id:
-        raise HTTPException(status_code=400, detail="Invalid or expired state")
+    org_id = await _pop_state(state)
 
     async with httpx.AsyncClient() as client:
         resp = await client.post(
@@ -122,7 +142,8 @@ async def slack_callback(code: str, state: str = Query(...)):
 @router.get("/jira/connect/{org_id}")
 async def jira_connect(org_id: str):
     state = secrets.token_urlsafe(32)
-    _oauth_states[state] = org_id
+    redis = get_redis()
+    await redis.setex(f"oauth_state:{state}", _STATE_TTL, org_id)
     url = (
         f"https://auth.atlassian.com/authorize"
         f"?audience=api.atlassian.com"
@@ -138,9 +159,7 @@ async def jira_connect(org_id: str):
 
 @router.get("/jira/callback")
 async def jira_callback(code: str, state: str = Query(...)):
-    org_id = _oauth_states.pop(state, None)
-    if not org_id:
-        raise HTTPException(status_code=400, detail="Invalid or expired state")
+    org_id = await _pop_state(state)
 
     async with httpx.AsyncClient() as client:
         resp = await client.post(
@@ -167,6 +186,15 @@ async def jira_callback(code: str, state: str = Query(...)):
 
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
+
+async def _pop_state(state: str) -> str:
+    """Retrieve and delete the org_id stored for this OAuth state token."""
+    redis = get_redis()
+    org_id = await redis.getdel(f"oauth_state:{state}")
+    if not org_id:
+        raise HTTPException(status_code=400, detail="Invalid or expired state")
+    return org_id
+
 
 async def _upsert_integration(
     org_id: str,
