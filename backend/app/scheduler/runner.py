@@ -3,7 +3,7 @@ from datetime import date
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
-from .jobs import github_poll_job, slack_poll_job
+from .jobs import github_poll_job, jira_poll_job, slack_poll_job
 
 scheduler = AsyncIOScheduler(timezone="UTC")
 
@@ -11,6 +11,7 @@ scheduler = AsyncIOScheduler(timezone="UTC")
 def start_scheduler() -> None:
     scheduler.add_job(github_poll_job, "interval", minutes=15, id="github_poller", replace_existing=True)
     scheduler.add_job(slack_poll_job, "interval", minutes=15, id="slack_poller", replace_existing=True)
+    scheduler.add_job(jira_poll_job, "interval", minutes=15, id="jira_poller", replace_existing=True)
     scheduler.start()
 
 
@@ -37,6 +38,10 @@ async def schedule_digest_for_org(org_id: str, digest_time: str, timezone: str) 
         }
         result = await pipeline.ainvoke(initial_state)
 
+        # Persist blockers and dep_conflicts inferred by the pipeline
+        from ..agents.persist import persist_pipeline_results
+        await persist_pipeline_results(result)
+
         async with get_db() as db:
             digest = Digest(
                 id=uuid.uuid4(),
@@ -44,12 +49,26 @@ async def schedule_digest_for_org(org_id: str, digest_time: str, timezone: str) 
                 digest_date=date.today(),
                 content=result,
                 markdown_output=result.get("final_digest", ""),
+                delivered=bool(result.get("final_digest")),
             )
             db.add(digest)
 
         if result.get("final_digest"):
             from ..delivery.slack_delivery import send_digest_to_channel
-            await send_digest_to_channel(org_id, result["final_digest"])
+            slack_ts = await send_digest_to_channel(org_id, result["final_digest"])
+            if slack_ts:
+                # Update the digest row with the Slack thread timestamp
+                async with get_db() as db:
+                    from sqlalchemy import select
+                    res = await db.execute(
+                        select(Digest).where(
+                            Digest.org_id == uuid.UUID(org_id),
+                            Digest.digest_date == date.today(),
+                        )
+                    )
+                    saved = res.scalar_one_or_none()
+                    if saved:
+                        saved.slack_ts = slack_ts
 
     scheduler.add_job(
         _run_digest,

@@ -6,6 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..agents.graph import pipeline
+from ..agents.persist import persist_pipeline_results
 from ..database import get_db_dep
 from ..models.digest import Digest
 
@@ -70,6 +71,9 @@ async def trigger_digest(org_id: str, db: AsyncSession = Depends(get_db_dep)):
     }
     result = await pipeline.ainvoke(initial_state)
 
+    # Persist blockers and dep_conflicts inferred by the pipeline
+    await persist_pipeline_results(result)
+
     digest = Digest(
         id=uuid.uuid4(),
         org_id=uuid.UUID(org_id),
@@ -83,6 +87,8 @@ async def trigger_digest(org_id: str, db: AsyncSession = Depends(get_db_dep)):
     return {
         "id": str(digest.id),
         "markdown_output": digest.markdown_output,
+        "blockers_found": len(result.get("blockers", [])),
+        "conflicts_found": len(result.get("conflicts", [])),
         "errors": result.get("errors", []),
     }
 

@@ -91,7 +91,9 @@ async def _poll_developer(
 
     # --- Commits across all user repos ---
     try:
-        resp = await client.get(
+        from .retry import with_retry
+        resp = await with_retry(
+            client.get,
             f"{GITHUB_API}/users/{dev.github_username}/events",
             params={"per_page": 50},
         )
