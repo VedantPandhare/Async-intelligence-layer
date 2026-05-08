@@ -246,21 +246,6 @@ curl -X POST http://localhost:8000/digests/{org_id}/trigger
 
 ---
 
-## What's Built (Current Status)
-
-| Week | Feature | Status |
-|------|---------|--------|
-| **Week 1** | PostgreSQL models, FastAPI, GitHub poller, normalizer, HuggingFace embedder, LangGraph pipeline (all 6 agents), Alembic migrations | ✅ Done |
-| **Week 2** | Slack poller, Slack webhook, Jira webhook, OAuth2 flows (GitHub/Slack/Jira), Fernet token encryption | ✅ Done |
-| **Week 3** | Blocker inference prompt tuning, Jira Linear poller, rate limiting, retry logic | 🔜 Next |
-| **Week 4** | Quiet hours logic, digest delivery polish, email fallback | ⏳ |
-| **Week 5** | Privacy controls, per-dev opt-out, 90-day retention policy | ⏳ |
-| **Week 6** | Next.js dashboard (digests, developer timelines, blockers, settings) | ⏳ |
-| **Week 7** | JWT auth, full production hardening | ⏳ |
-| **Week 8** | Railway + Vercel deployment | ⏳ |
-
----
-
 ## API Reference (Key Endpoints)
 
 | Method | Endpoint | Description |
@@ -293,19 +278,6 @@ Full interactive docs: `http://localhost:8000/docs`
 - **No manager-only views** — the digest is shared with the whole team
 
 ---
-
-## Cost Estimate
-
-| Team size | Claude (agents) | HuggingFace (embeddings) | Total/day |
-|-----------|----------------|--------------------------|-----------|
-| 10 devs | ~$0.12 | Free | ~$0.12 |
-| 50 devs | ~$0.50 | Free | ~$0.50 |
-| 100 devs | ~$1.00 | Free | ~$1.00 |
-
-At `$15/seat/month` pricing: margins are exceptional.
-
----
-
 ## License
 
 MIT
