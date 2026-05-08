@@ -1,10 +1,11 @@
 import uuid
+
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..core.security import get_current_org
+from ..core.security import generate_api_key, get_current_org, hash_api_key
 from ..database import get_db_dep
 from ..models.organization import Organization
 from ..scheduler.runner import schedule_digest_for_org
@@ -33,17 +34,22 @@ async def create_org(payload: OrgCreate, db: AsyncSession = Depends(get_db_dep))
 
     from datetime import time
     h, m = (int(x) for x in payload.digest_time.split(":")[:2])
+
+    api_key = generate_api_key()
     org = Organization(
         id=uuid.uuid4(),
         name=payload.name,
         slug=payload.slug,
         digest_time=time(h, m),
         timezone=payload.timezone,
+        settings={"api_key_hash": hash_api_key(api_key)},
     )
     db.add(org)
     await db.flush()
     await schedule_digest_for_org(str(org.id), payload.digest_time, payload.timezone)
-    return {"id": str(org.id), "slug": org.slug}
+
+    # api_key is returned exactly once — the caller must store it
+    return {"id": str(org.id), "slug": org.slug, "api_key": api_key}
 
 
 @router.get("/{org_id}/settings")
@@ -52,13 +58,15 @@ async def get_settings(org_id: str, db: AsyncSession = Depends(get_db_dep)):
     org = result.scalar_one_or_none()
     if not org:
         raise HTTPException(status_code=404, detail="Org not found")
+    # Strip internal secrets from the public settings view
+    public_settings = {k: v for k, v in org.settings.items() if k != "api_key_hash"}
     return {
         "id": str(org.id),
         "name": org.name,
         "slug": org.slug,
         "digest_time": org.digest_time.strftime("%H:%M"),
         "timezone": org.timezone,
-        "settings": org.settings,
+        "settings": public_settings,
     }
 
 
@@ -90,6 +98,25 @@ async def update_settings(
     await schedule_digest_for_org(org_id, dt, tz)
 
     return {"status": "updated"}
+
+
+@router.post("/{org_id}/api-key/rotate", status_code=200)
+async def rotate_api_key(
+    org_id: str,
+    db: AsyncSession = Depends(get_db_dep),
+    _: str = Depends(get_current_org),
+):
+    """Invalidate the current API key and issue a new one. Returned exactly once."""
+    result = await db.execute(select(Organization).where(Organization.id == uuid.UUID(org_id)))
+    org = result.scalar_one_or_none()
+    if not org:
+        raise HTTPException(status_code=404, detail="Org not found")
+
+    new_key = generate_api_key()
+    org.settings = {**org.settings, "api_key_hash": hash_api_key(new_key)}
+    await db.flush()
+
+    return {"api_key": new_key}
 
 
 @router.post("/{org_id}/retention/run", status_code=202)

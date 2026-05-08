@@ -46,6 +46,7 @@ class Settings(BaseSettings):
     jwt_secret: str = "dev-jwt-secret"
     environment: str = "development"
     event_retention_days: int = 90
+    cors_origins: str = "http://localhost:3000,http://localhost:8000"
 
 
 @lru_cache

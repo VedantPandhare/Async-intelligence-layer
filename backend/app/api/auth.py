@@ -1,52 +1,112 @@
 """OAuth2 callback handlers for GitHub, Slack, and Jira integrations.
-Also exposes POST /auth/token for API consumers to exchange org credentials for a JWT.
+Exposes JWT issuance, refresh token rotation, and revocation endpoints.
 """
 
 import secrets
 import uuid
 
 import httpx
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel
 from sqlalchemy import select
 
 from ..config import get_settings
 from ..core.encryption import encrypt_token
+from ..core.limiter import limiter
+from ..core.logging import get_logger
 from ..core.redis_client import get_redis
-from ..core.security import create_access_token
+from ..core.security import (
+    create_access_token,
+    create_refresh_token,
+    revoke_refresh_token,
+    rotate_refresh_token,
+    verify_api_key,
+)
 from ..database import get_db
 from ..models.integration import Integration
+from ..models.organization import Organization
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 settings = get_settings()
+logger = get_logger(__name__)
 
 _STATE_TTL = 600  # seconds
 
 
-# ─── JWT token issuance ────────────────────────────────────────────────────────
+# ─── JWT issuance ─────────────────────────────────────────────────────────────
 
 class TokenRequest(BaseModel):
     org_id: str
     secret: str
 
 
-@router.post("/token")
-async def issue_token(payload: TokenRequest):
-    """Exchange org_id + master secret for a 24-hour JWT.
+class RefreshRequest(BaseModel):
+    refresh_token: str
 
-    In production this is replaced by full per-org API keys (Week 7).
-    """
-    if payload.secret != settings.secret_key:
+
+@router.post("/token")
+@limiter.limit("5/minute")
+async def issue_token(request: Request, payload: TokenRequest):
+    """Exchange org_id + API key (or master secret in dev) for a 15-min JWT + 7-day refresh token."""
+    async with get_db() as db:
+        result = await db.execute(
+            select(Organization).where(Organization.id == uuid.UUID(payload.org_id))
+        )
+        org = result.scalar_one_or_none()
+
+    if not org:
         raise HTTPException(status_code=401, detail="Invalid credentials")
-    token = create_access_token(payload.org_id)
-    return {"access_token": token, "token_type": "bearer", "expires_in": 86400}
+
+    stored_hash: str | None = org.settings.get("api_key_hash")
+
+    if stored_hash:
+        # Per-org API key is set — validate against stored hash
+        if not verify_api_key(payload.secret, stored_hash):
+            logger.warning("failed auth attempt", extra={"org_id": payload.org_id, "ip": request.client.host if request.client else "unknown"})
+            raise HTTPException(status_code=401, detail="Invalid credentials")
+    else:
+        # No per-org key yet — fall back to master secret (dev mode)
+        if payload.secret != settings.secret_key:
+            raise HTTPException(status_code=401, detail="Invalid credentials")
+
+    access_token = create_access_token(org.id.__str__())
+    refresh_token = await create_refresh_token(str(org.id))
+
+    return {
+        "access_token": access_token,
+        "token_type": "bearer",
+        "expires_in": 900,  # 15 minutes
+        "refresh_token": refresh_token,
+    }
+
+
+@router.post("/refresh")
+async def refresh_token_endpoint(payload: RefreshRequest):
+    """Rotate a refresh token — returns a new access token and a new refresh token.
+    The old refresh token is invalidated immediately (one-time use)."""
+    result = await rotate_refresh_token(payload.refresh_token)
+    if not result:
+        raise HTTPException(status_code=401, detail="Refresh token invalid or expired")
+    access_token, new_refresh = result
+    return {
+        "access_token": access_token,
+        "token_type": "bearer",
+        "expires_in": 900,
+        "refresh_token": new_refresh,
+    }
+
+
+@router.post("/revoke")
+async def revoke_token_endpoint(payload: RefreshRequest):
+    """Revoke a refresh token — effectively logs out the session."""
+    await revoke_refresh_token(payload.refresh_token)
+    return {"status": "revoked"}
 
 
 # ─── GitHub ───────────────────────────────────────────────────────────────────
 
 @router.get("/github/connect/{org_id}")
 async def github_connect(org_id: str):
-    """Generate GitHub OAuth URL for the org to initiate the flow."""
     state = secrets.token_urlsafe(32)
     redis = get_redis()
     await redis.setex(f"oauth_state:{state}", _STATE_TTL, org_id)
@@ -188,7 +248,6 @@ async def jira_callback(code: str, state: str = Query(...)):
 # ─── Helpers ──────────────────────────────────────────────────────────────────
 
 async def _pop_state(state: str) -> str:
-    """Retrieve and delete the org_id stored for this OAuth state token."""
     redis = get_redis()
     org_id = await redis.getdel(f"oauth_state:{state}")
     if not org_id:
@@ -203,7 +262,6 @@ async def _upsert_integration(
     refresh_token: str = "",
     metadata: dict | None = None,
 ) -> None:
-    """Insert or update an integration row with encrypted tokens."""
     async with get_db() as db:
         result = await db.execute(
             select(Integration).where(

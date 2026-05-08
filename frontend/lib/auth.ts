@@ -18,6 +18,7 @@ export const setOrgId = (orgId: string): void => {
 
 export const clearAuth = (): void => {
   localStorage.removeItem("jwt_token");
+  localStorage.removeItem("refresh_token");
   localStorage.removeItem("org_id");
 };
 
