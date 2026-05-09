@@ -29,9 +29,17 @@ def get_hf_client() -> InferenceClient:
 def get_qdrant_client() -> AsyncQdrantClient:
     global _qdrant_client
     if _qdrant_client is None:
-        _qdrant_client = AsyncQdrantClient(
-            host=settings.qdrant_host, port=settings.qdrant_port
-        )
+        if settings.qdrant_url:
+            # Qdrant Cloud: full URL + optional API key
+            _qdrant_client = AsyncQdrantClient(
+                url=settings.qdrant_url,
+                api_key=settings.qdrant_api_key or None,
+            )
+        else:
+            # Local / Docker: host + port
+            _qdrant_client = AsyncQdrantClient(
+                host=settings.qdrant_host, port=settings.qdrant_port
+            )
     return _qdrant_client
 
 

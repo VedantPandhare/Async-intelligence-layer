@@ -72,4 +72,30 @@ app.include_router(router)
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "version": "0.1.0"}
+    from datetime import datetime, timezone
+    checks: dict[str, str] = {}
+
+    # Database
+    try:
+        from .database import engine
+        async with engine.connect() as conn:
+            await conn.execute(__import__("sqlalchemy").text("SELECT 1"))
+        checks["db"] = "ok"
+    except Exception as exc:
+        checks["db"] = f"error: {exc}"
+
+    # Redis
+    try:
+        from .core.redis_client import get_redis
+        await get_redis().ping()
+        checks["redis"] = "ok"
+    except Exception as exc:
+        checks["redis"] = f"error: {exc}"
+
+    overall = "ok" if all(v == "ok" for v in checks.values()) else "degraded"
+    return {
+        "status": overall,
+        "version": "0.1.0",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "checks": checks,
+    }

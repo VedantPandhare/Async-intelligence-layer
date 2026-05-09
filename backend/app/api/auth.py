@@ -11,6 +11,7 @@ from pydantic import BaseModel
 from sqlalchemy import select
 
 from ..config import get_settings
+from ..core.analytics import track
 from ..core.encryption import encrypt_token
 from ..core.limiter import limiter
 from ..core.logging import get_logger
@@ -71,6 +72,7 @@ async def issue_token(request: Request, payload: TokenRequest):
 
     access_token = create_access_token(org.id.__str__())
     refresh_token = await create_refresh_token(str(org.id))
+    track("user_login", str(org.id), {"org_slug": org.slug})
 
     return {
         "access_token": access_token,
@@ -146,6 +148,7 @@ async def github_callback(code: str, state: str = Query(...)):
         access_token=access_token,
         metadata={"scope": data.get("scope", "")},
     )
+    track("integration_connected", org_id, {"provider": "github"})
     return {"status": "connected", "provider": "github", "org_id": org_id}
 
 
@@ -194,6 +197,7 @@ async def slack_callback(code: str, state: str = Query(...)):
         access_token=access_token,
         metadata={"workspace_id": workspace_id, "team_name": data.get("team", {}).get("name")},
     )
+    track("integration_connected", org_id, {"provider": "slack"})
     return {"status": "connected", "provider": "slack", "org_id": org_id}
 
 
@@ -242,6 +246,7 @@ async def jira_callback(code: str, state: str = Query(...)):
         refresh_token=data.get("refresh_token", ""),
         metadata={"expires_in": data.get("expires_in")},
     )
+    track("integration_connected", org_id, {"provider": "jira"})
     return {"status": "connected", "provider": "jira", "org_id": org_id}
 
 

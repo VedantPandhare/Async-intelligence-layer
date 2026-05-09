@@ -11,9 +11,11 @@ class Settings(BaseSettings):
     # Redis
     redis_url: str = "redis://localhost:6379/0"
 
-    # Qdrant
+    # Qdrant — local dev uses host/port; Qdrant Cloud uses qdrant_url + qdrant_api_key
     qdrant_host: str = "localhost"
     qdrant_port: int = 6333
+    qdrant_url: str = ""           # e.g. https://xxx.qdrant.io  (overrides host/port when set)
+    qdrant_api_key: str = ""       # Qdrant Cloud API key
 
     # Anthropic (LLM agents)
     anthropic_api_key: str = ""
@@ -47,6 +49,13 @@ class Settings(BaseSettings):
     environment: str = "development"
     event_retention_days: int = 90
     cors_origins: str = "http://localhost:3000,http://localhost:8000"
+
+    # URLs (used to build redirect links in OAuth and emails)
+    base_url: str = "http://localhost:8000"
+    frontend_url: str = "http://localhost:3000"
+
+    # Analytics (PostHog — optional, gracefully skipped if unset)
+    posthog_api_key: str = ""
 
 
 @lru_cache

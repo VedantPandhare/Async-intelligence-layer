@@ -1,0 +1,97 @@
+services:
+
+  # ── Web Service: FastAPI (webhooks, auth, REST API) ───────────────────────
+  - type: web
+    name: standup-api
+    runtime: python
+    rootDir: backend
+    buildCommand: pip install -r requirements.txt && alembic upgrade head
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    plan: free
+    healthCheckPath: /health
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: REDIS_URL
+        sync: false
+      - key: QDRANT_URL
+        sync: false
+      - key: QDRANT_API_KEY
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: HF_TOKEN
+        sync: false
+      - key: SLACK_CLIENT_ID
+        sync: false
+      - key: SLACK_CLIENT_SECRET
+        sync: false
+      - key: SLACK_SIGNING_SECRET
+        sync: false
+      - key: SLACK_BOT_TOKEN
+        sync: false
+      - key: GITHUB_CLIENT_ID
+        sync: false
+      - key: GITHUB_CLIENT_SECRET
+        sync: false
+      - key: GITHUB_WEBHOOK_SECRET
+        sync: false
+      - key: JIRA_CLIENT_ID
+        sync: false
+      - key: JIRA_CLIENT_SECRET
+        sync: false
+      - key: SENDGRID_API_KEY
+        sync: false
+      - key: EMAIL_FROM
+        value: digest@standup.ai
+      - key: ENCRYPTION_KEY
+        sync: false
+      - key: SECRET_KEY
+        sync: false
+      - key: JWT_SECRET
+        sync: false
+      - key: POSTHOG_API_KEY
+        sync: false
+      - key: ENVIRONMENT
+        value: production
+      - key: BASE_URL
+        sync: false          # set to https://api.yourdomain.com
+      - key: FRONTEND_URL
+        sync: false          # set to https://app.yourdomain.com
+      - key: CORS_ORIGINS
+        sync: false          # set to https://app.yourdomain.com
+
+  # ── Background Worker: APScheduler + LangGraph pipeline ──────────────────
+  # Uses Render's Background Worker (never sleeps, unlike web service)
+  - type: worker
+    name: standup-worker
+    runtime: python
+    rootDir: backend
+    buildCommand: pip install -r requirements.txt
+    startCommand: python run_worker.py
+    plan: free
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: REDIS_URL
+        sync: false
+      - key: QDRANT_URL
+        sync: false
+      - key: QDRANT_API_KEY
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: HF_TOKEN
+        sync: false
+      - key: SLACK_BOT_TOKEN
+        sync: false
+      - key: SENDGRID_API_KEY
+        sync: false
+      - key: EMAIL_FROM
+        value: digest@standup.ai
+      - key: ENCRYPTION_KEY
+        sync: false
+      - key: POSTHOG_API_KEY
+        sync: false
+      - key: ENVIRONMENT
+        value: production

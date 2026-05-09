@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..agents.graph import pipeline
 from ..agents.persist import persist_pipeline_results
+from ..core.analytics import track
 from ..core.security import get_current_org
 from ..database import get_db_dep
 from ..models.digest import Digest
@@ -88,10 +89,20 @@ async def trigger_digest(
     db.add(digest)
     await db.flush()
 
+    blockers_found = len(result.get("blockers", []))
+    track("digest_generated", org_id, {
+        "blockers_found": blockers_found,
+        "conflicts_found": len(result.get("conflicts", [])),
+        "has_errors": bool(result.get("errors")),
+        "triggered_manually": True,
+    })
+    if blockers_found:
+        track("blocker_detected", org_id, {"count": blockers_found})
+
     return {
         "id": str(digest.id),
         "markdown_output": digest.markdown_output,
-        "blockers_found": len(result.get("blockers", [])),
+        "blockers_found": blockers_found,
         "conflicts_found": len(result.get("conflicts", [])),
         "errors": result.get("errors", []),
     }
