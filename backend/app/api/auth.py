@@ -5,6 +5,7 @@ Includes email/password registration and login for the web UI.
 
 import hashlib
 import hmac as _hmac
+import json
 import os
 import re
 import secrets
@@ -12,6 +13,7 @@ import uuid
 
 import httpx
 from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
 from sqlalchemy import select
 
@@ -38,6 +40,7 @@ settings = get_settings()
 logger = get_logger(__name__)
 
 _STATE_TTL = 600  # seconds
+GITHUB_API = "https://api.github.com"
 
 
 # ─── Password utilities ───────────────────────────────────────────────────────
@@ -217,14 +220,19 @@ async def revoke_token_endpoint(payload: RefreshRequest):
 # ─── GitHub ───────────────────────────────────────────────────────────────────
 
 @router.get("/github/connect/{org_id}")
-async def github_connect(org_id: str):
+async def github_connect(org_id: str, redirect_to: str = "/onboarding"):
+    """Start GitHub OAuth — returns the authorization URL to redirect the browser to."""
     state = secrets.token_urlsafe(32)
     redis = get_redis()
-    await redis.setex(f"oauth_state:{state}", _STATE_TTL, org_id)
+    await redis.setex(
+        f"oauth_state:{state}",
+        _STATE_TTL,
+        json.dumps({"org_id": org_id, "redirect_to": redirect_to}),
+    )
     url = (
         f"https://github.com/login/oauth/authorize"
         f"?client_id={settings.github_client_id}"
-        f"&scope=repo,read:org"
+        f"&scope=repo,read:org,user:email"
         f"&state={state}"
     )
     return {"authorization_url": url}
@@ -232,10 +240,14 @@ async def github_connect(org_id: str):
 
 @router.get("/github/callback")
 async def github_callback(code: str, state: str = Query(...)):
-    org_id = await _pop_state(state)
+    """GitHub redirects here after user authorises. Stores the token and redirects to the frontend."""
+    state_data = await _pop_state(state)
+    org_id = state_data["org_id"]
+    redirect_to = state_data.get("redirect_to", "/onboarding")
 
     async with httpx.AsyncClient() as client:
-        resp = await client.post(
+        # Exchange code for access token
+        token_resp = await client.post(
             "https://github.com/login/oauth/access_token",
             data={
                 "client_id": settings.github_client_id,
@@ -244,34 +256,64 @@ async def github_callback(code: str, state: str = Query(...)):
             },
             headers={"Accept": "application/json"},
         )
-        resp.raise_for_status()
-        data = resp.json()
+        token_resp.raise_for_status()
+        token_data = token_resp.json()
 
-    access_token = data.get("access_token")
+    access_token = token_data.get("access_token")
     if not access_token:
-        raise HTTPException(status_code=400, detail=f"GitHub OAuth failed: {data}")
+        logger.error("github oauth failed", extra={"data": token_data})
+        return RedirectResponse(f"{settings.frontend_url}{redirect_to}?error=github_oauth_failed")
+
+    gh_headers = {
+        "Authorization": f"token {access_token}",
+        "Accept": "application/vnd.github+json",
+    }
+
+    # Fetch authenticated user info + their org memberships
+    github_user: dict = {}
+    github_orgs: list[str] = []
+    try:
+        async with httpx.AsyncClient(headers=gh_headers, timeout=15) as client:
+            user_resp = await client.get(f"{GITHUB_API}/user")
+            if user_resp.status_code == 200:
+                github_user = user_resp.json()
+
+            orgs_resp = await client.get(f"{GITHUB_API}/user/orgs", params={"per_page": 50})
+            if orgs_resp.status_code == 200:
+                github_orgs = [o["login"] for o in orgs_resp.json()]
+    except Exception as exc:
+        logger.warning("github user fetch failed", extra={"error": str(exc)})
 
     await _upsert_integration(
         org_id=org_id,
         provider="github",
         access_token=access_token,
-        metadata={"scope": data.get("scope", "")},
+        metadata={
+            "scope": token_data.get("scope", ""),
+            "github_username": github_user.get("login", ""),
+            "github_orgs": github_orgs,
+        },
     )
     track("integration_connected", org_id, {"provider": "github"})
-    return {"status": "connected", "provider": "github", "org_id": org_id}
+    return RedirectResponse(f"{settings.frontend_url}{redirect_to}?connected=github")
 
 
 # ─── Slack ────────────────────────────────────────────────────────────────────
 
 @router.get("/slack/connect/{org_id}")
-async def slack_connect(org_id: str):
+async def slack_connect(org_id: str, redirect_to: str = "/onboarding"):
+    """Start Slack OAuth — returns the authorization URL to redirect the browser to."""
     state = secrets.token_urlsafe(32)
     redis = get_redis()
-    await redis.setex(f"oauth_state:{state}", _STATE_TTL, org_id)
-    scopes = "channels:history,channels:read,chat:write,users:read,im:write"
+    await redis.setex(
+        f"oauth_state:{state}",
+        _STATE_TTL,
+        json.dumps({"org_id": org_id, "redirect_to": redirect_to}),
+    )
+    scopes = "channels:history,channels:read,chat:write,users:read,users:read.email,im:write"
     url = (
         f"https://slack.com/oauth/v2/authorize"
-        f"?client_id={settings.github_client_id}"
+        f"?client_id={settings.slack_client_id}"
         f"&scope={scopes}"
         f"&state={state}"
     )
@@ -280,14 +322,17 @@ async def slack_connect(org_id: str):
 
 @router.get("/slack/callback")
 async def slack_callback(code: str, state: str = Query(...)):
-    org_id = await _pop_state(state)
+    """Slack redirects here after user installs the app. Stores the bot token and redirects to frontend."""
+    state_data = await _pop_state(state)
+    org_id = state_data["org_id"]
+    redirect_to = state_data.get("redirect_to", "/onboarding")
 
     async with httpx.AsyncClient() as client:
         resp = await client.post(
             "https://slack.com/api/oauth.v2.access",
             data={
-                "client_id": settings.github_client_id,
-                "client_secret": settings.github_client_secret,
+                "client_id": settings.slack_client_id,
+                "client_secret": settings.slack_client_secret,
                 "code": code,
             },
         )
@@ -295,28 +340,58 @@ async def slack_callback(code: str, state: str = Query(...)):
         data = resp.json()
 
     if not data.get("ok"):
-        raise HTTPException(status_code=400, detail=f"Slack OAuth failed: {data.get('error')}")
+        logger.error("slack oauth failed", extra={"error": data.get("error")})
+        return RedirectResponse(f"{settings.frontend_url}{redirect_to}?error=slack_oauth_failed")
 
     access_token = data["access_token"]
-    workspace_id = data.get("team", {}).get("id")
+    workspace_id = data.get("team", {}).get("id", "")
+    workspace_name = data.get("team", {}).get("name", "")
+
+    # Fetch public channel list for the workspace
+    channels: list[dict] = []
+    try:
+        async with httpx.AsyncClient(
+            headers={"Authorization": f"Bearer {access_token}"},
+            timeout=15,
+        ) as client:
+            ch_resp = await client.get(
+                "https://slack.com/api/conversations.list",
+                params={"limit": 100, "exclude_archived": "true", "types": "public_channel"},
+            )
+            ch_data = ch_resp.json()
+            if ch_data.get("ok"):
+                channels = [
+                    {"id": c["id"], "name": c["name"]}
+                    for c in ch_data.get("channels", [])
+                ]
+    except Exception as exc:
+        logger.warning("slack channels fetch failed", extra={"error": str(exc)})
 
     await _upsert_integration(
         org_id=org_id,
         provider="slack",
         access_token=access_token,
-        metadata={"workspace_id": workspace_id, "team_name": data.get("team", {}).get("name")},
+        metadata={
+            "workspace_id": workspace_id,
+            "workspace_name": workspace_name,
+            "channels": channels,
+        },
     )
     track("integration_connected", org_id, {"provider": "slack"})
-    return {"status": "connected", "provider": "slack", "org_id": org_id}
+    return RedirectResponse(f"{settings.frontend_url}{redirect_to}?connected=slack")
 
 
 # ─── Jira ─────────────────────────────────────────────────────────────────────
 
 @router.get("/jira/connect/{org_id}")
-async def jira_connect(org_id: str):
+async def jira_connect(org_id: str, redirect_to: str = "/onboarding"):
     state = secrets.token_urlsafe(32)
     redis = get_redis()
-    await redis.setex(f"oauth_state:{state}", _STATE_TTL, org_id)
+    await redis.setex(
+        f"oauth_state:{state}",
+        _STATE_TTL,
+        json.dumps({"org_id": org_id, "redirect_to": redirect_to}),
+    )
     url = (
         f"https://auth.atlassian.com/authorize"
         f"?audience=api.atlassian.com"
@@ -332,7 +407,9 @@ async def jira_connect(org_id: str):
 
 @router.get("/jira/callback")
 async def jira_callback(code: str, state: str = Query(...)):
-    org_id = await _pop_state(state)
+    state_data = await _pop_state(state)
+    org_id = state_data["org_id"]
+    redirect_to = state_data.get("redirect_to", "/onboarding")
 
     async with httpx.AsyncClient() as client:
         resp = await client.post(
@@ -356,17 +433,23 @@ async def jira_callback(code: str, state: str = Query(...)):
         metadata={"expires_in": data.get("expires_in")},
     )
     track("integration_connected", org_id, {"provider": "jira"})
-    return {"status": "connected", "provider": "jira", "org_id": org_id}
+    return RedirectResponse(f"{settings.frontend_url}{redirect_to}?connected=jira")
 
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
 
-async def _pop_state(state: str) -> str:
+async def _pop_state(state: str) -> dict:
+    """Retrieve and delete state from Redis. Returns dict with org_id and redirect_to."""
     redis = get_redis()
-    org_id = await redis.getdel(f"oauth_state:{state}")
-    if not org_id:
-        raise HTTPException(status_code=400, detail="Invalid or expired state")
-    return org_id
+    raw = await redis.getdel(f"oauth_state:{state}")
+    if not raw:
+        raise HTTPException(status_code=400, detail="Invalid or expired OAuth state")
+    raw_str = raw.decode() if isinstance(raw, bytes) else raw
+    try:
+        return json.loads(raw_str)
+    except Exception:
+        # Backwards compat: raw value was just org_id string
+        return {"org_id": raw_str, "redirect_to": "/onboarding"}
 
 
 async def _upsert_integration(

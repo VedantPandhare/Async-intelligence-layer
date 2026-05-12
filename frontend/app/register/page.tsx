@@ -45,7 +45,7 @@ export default function RegisterPage() {
       if (data.refresh_token) {
         localStorage.setItem("refresh_token", data.refresh_token);
       }
-      router.push("/dashboard");
+      router.push("/onboarding");
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Registration failed");
     } finally {

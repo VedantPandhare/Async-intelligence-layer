@@ -91,6 +91,73 @@ export async function registerUser(payload: {
   return res.json();
 }
 
+// ─── Integrations ─────────────────────────────────────────────────────────────
+
+export type IntegrationStatus = {
+  connected: boolean;
+  connected_at?: string;
+  metadata?: {
+    github_username?: string;
+    github_orgs?: string[];
+    workspace_name?: string;
+    workspace_id?: string;
+    channels?: { id: string; name: string }[];
+    scope?: string;
+  };
+};
+
+export type IntegrationsResponse = {
+  github: IntegrationStatus;
+  slack: IntegrationStatus;
+  jira: IntegrationStatus;
+};
+
+export async function getIntegrations(orgId: string): Promise<IntegrationsResponse> {
+  return apiFetch<IntegrationsResponse>(`/org/${orgId}/integrations`);
+}
+
+export async function disconnectIntegration(orgId: string, provider: string): Promise<void> {
+  await apiFetch(`/org/${orgId}/integrations/${provider}`, { method: "DELETE" });
+}
+
+/** Returns the GitHub OAuth authorization URL. Open it with window.location.href. */
+export async function getGithubConnectUrl(
+  orgId: string,
+  redirectTo: string = "/onboarding",
+): Promise<string> {
+  const data = await apiFetch<{ authorization_url: string }>(
+    `/auth/github/connect/${orgId}?redirect_to=${encodeURIComponent(redirectTo)}`,
+  );
+  return data.authorization_url;
+}
+
+/** Returns the Slack OAuth authorization URL. Open it with window.location.href. */
+export async function getSlackConnectUrl(
+  orgId: string,
+  redirectTo: string = "/onboarding",
+): Promise<string> {
+  const data = await apiFetch<{ authorization_url: string }>(
+    `/auth/slack/connect/${orgId}?redirect_to=${encodeURIComponent(redirectTo)}`,
+  );
+  return data.authorization_url;
+}
+
+// ─── Developer import ─────────────────────────────────────────────────────────
+
+export type ImportResult = {
+  imported: number;
+  skipped: number;
+  developers: { name: string; github_username: string }[];
+};
+
+export async function importFromGitHub(orgId: string): Promise<ImportResult> {
+  return apiFetch<ImportResult>(`/developers/${orgId}/import-github`, { method: "POST" });
+}
+
+export async function listGithubOrgs(orgId: string): Promise<{ orgs: string[] }> {
+  return apiFetch<{ orgs: string[] }>(`/developers/${orgId}/github-orgs`);
+}
+
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 export type Digest = {
@@ -138,5 +205,11 @@ export type OrgSettings = {
   slug: string;
   digest_time: string;
   timezone: string;
-  settings: Record<string, unknown>;
+  settings: {
+    slack_channel?: string;
+    github_org?: string;
+    github_repos?: string[];
+    slack_read_channels?: string[];
+    [key: string]: unknown;
+  };
 };

@@ -12,6 +12,7 @@ from ..core.logging import get_logger
 from ..database import get_db
 from ..models.developer import Developer
 from ..models.integration import Integration
+from ..models.organization import Organization
 from .embedder import embed_and_store_event
 from .normalizer import (
     NormalizedEvent,
@@ -63,6 +64,13 @@ async def poll_github_for_org(org_id: str) -> None:
         )
         developers = devs_result.scalars().all()
 
+        org_result = await db.execute(
+            select(Organization).where(Organization.id == uuid.UUID(org_id))
+        )
+        org = org_result.scalar_one_or_none()
+        # If github_repos is set and non-empty, restrict events to those repos only
+        allowed_repos: set[str] = set((org.settings or {}).get("github_repos", [])) if org else set()
+
     since = datetime.now(timezone.utc) - timedelta(minutes=20)
 
     async with httpx.AsyncClient(
@@ -74,7 +82,7 @@ async def poll_github_for_org(org_id: str) -> None:
         timeout=30,
     ) as client:
         tasks = [
-            _poll_developer(client, dev, org_id, since)
+            _poll_developer(client, dev, org_id, since, allowed_repos)
             for dev in developers
         ]
         await asyncio.gather(*tasks, return_exceptions=True)
@@ -85,13 +93,13 @@ async def _poll_developer(
     dev: Developer,
     org_id: str,
     since: datetime,
+    allowed_repos: set[str] = frozenset(),
 ) -> None:
     since_iso = since.strftime("%Y-%m-%dT%H:%M:%SZ")
     dev_id = str(dev.id)
 
     events: list[NormalizedEvent] = []
 
-    # --- Commits across all user repos ---
     try:
         from .retry import with_retry
         resp = await with_retry(
@@ -106,20 +114,24 @@ async def _poll_developer(
                 if created < since_iso:
                     continue
 
+                repo = event.get("repo", {}).get("name", "")
+                # Filter to configured repos when a list is provided
+                if allowed_repos and repo and repo not in allowed_repos:
+                    continue
+
                 if etype == "PushEvent":
-                    repo = event.get("repo", {}).get("name", "")
                     for commit in event.get("payload", {}).get("commits", []):
                         commit["repo"] = repo
                         events.append(normalize_github_commit(commit, dev_id, org_id))
 
                 elif etype == "PullRequestEvent":
                     pr_payload = event.get("payload", {})
-                    pr_payload["repo"] = event.get("repo", {}).get("name", "")
+                    pr_payload["repo"] = repo
                     events.append(normalize_github_pr(pr_payload, dev_id, org_id))
 
                 elif etype == "CheckRunEvent":
                     cr_payload = event.get("payload", {})
-                    cr_payload["repo"] = event.get("repo", {}).get("name", "")
+                    cr_payload["repo"] = repo
                     events.append(normalize_github_ci_run(cr_payload, dev_id, org_id))
     except Exception as exc:
         logger.warning("github events fetch failed", extra={"username": dev.github_username, "error": str(exc)})
