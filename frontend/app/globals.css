@@ -2,6 +2,21 @@
 @tailwind components;
 @tailwind utilities;
 
+@keyframes pulseBar {
+  0%   { opacity: 0.55; }
+  100% { opacity: 1; }
+}
+
+@keyframes fadeInUp {
+  from { opacity: 0; transform: translateY(12px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.animate-fadeIn {
+  opacity: 0;
+  animation: fadeInUp 0.55s ease-out forwards;
+}
+
 @layer base {
   body {
     @apply bg-slate-950 text-slate-100 antialiased font-sans;
