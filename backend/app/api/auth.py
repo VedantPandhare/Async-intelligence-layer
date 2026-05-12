@@ -1,7 +1,12 @@
 """OAuth2 callback handlers for GitHub, Slack, and Jira integrations.
 Exposes JWT issuance, refresh token rotation, and revocation endpoints.
+Includes email/password registration and login for the web UI.
 """
 
+import hashlib
+import hmac as _hmac
+import os
+import re
 import secrets
 import uuid
 
@@ -26,6 +31,7 @@ from ..core.security import (
 from ..database import get_db
 from ..models.integration import Integration
 from ..models.organization import Organization
+from ..models.user import User
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 settings = get_settings()
@@ -34,7 +40,113 @@ logger = get_logger(__name__)
 _STATE_TTL = 600  # seconds
 
 
-# ─── JWT issuance ─────────────────────────────────────────────────────────────
+# ─── Password utilities ───────────────────────────────────────────────────────
+
+def hash_password(password: str) -> str:
+    salt = os.urandom(16)
+    dk = hashlib.scrypt(password.encode(), salt=salt, n=16384, r=8, p=1)
+    return f"{salt.hex()}:{dk.hex()}"
+
+
+def verify_password(password: str, stored: str) -> bool:
+    try:
+        salt_hex, dk_hex = stored.split(":", 1)
+        dk = hashlib.scrypt(password.encode(), salt=bytes.fromhex(salt_hex), n=16384, r=8, p=1)
+        return _hmac.compare_digest(dk.hex(), dk_hex)
+    except Exception:
+        return False
+
+
+# ─── Email / password auth ────────────────────────────────────────────────────
+
+class RegisterRequest(BaseModel):
+    name: str
+    email: str
+    password: str
+    org_name: str
+
+
+class EmailLoginRequest(BaseModel):
+    email: str
+    password: str
+
+
+@router.post("/register", status_code=201)
+@limiter.limit("5/minute")
+async def register(request: Request, payload: RegisterRequest):
+    """Create a new organisation and user account."""
+    slug = re.sub(r"[^a-z0-9]+", "-", payload.org_name.lower()).strip("-") or "org"
+
+    async with get_db() as db:
+        existing_user = await db.execute(select(User).where(User.email == payload.email.lower()))
+        if existing_user.scalar_one_or_none():
+            raise HTTPException(status_code=409, detail="Email already registered")
+
+        existing_slug = await db.execute(select(Organization).where(Organization.slug == slug))
+        if existing_slug.scalar_one_or_none():
+            slug = f"{slug}-{secrets.token_urlsafe(4).lower()}"
+
+        org = Organization(
+            id=uuid.uuid4(),
+            name=payload.org_name,
+            slug=slug,
+            settings={},
+        )
+        db.add(org)
+        await db.flush()
+
+        user = User(
+            id=uuid.uuid4(),
+            org_id=org.id,
+            name=payload.name,
+            email=payload.email.lower(),
+            password_hash=hash_password(payload.password),
+        )
+        db.add(user)
+        await db.flush()
+
+        org_id_str = str(org.id)
+
+    access_token = create_access_token(org_id_str)
+    refresh_token = await create_refresh_token(org_id_str)
+    track("user_registered", org_id_str, {"org_slug": slug})
+
+    return {
+        "access_token": access_token,
+        "token_type": "bearer",
+        "expires_in": 900,
+        "refresh_token": refresh_token,
+        "org_id": org_id_str,
+    }
+
+
+@router.post("/login")
+@limiter.limit("10/minute")
+async def login_with_email(request: Request, payload: EmailLoginRequest):
+    """Login with email and password — returns JWT + refresh token + org_id."""
+    async with get_db() as db:
+        result = await db.execute(select(User).where(User.email == payload.email.lower()))
+        user = result.scalar_one_or_none()
+
+    if not user or not verify_password(payload.password, user.password_hash):
+        logger.warning("failed email login", extra={"email": payload.email})
+        raise HTTPException(status_code=401, detail="Invalid email or password")
+
+    org_id_str = str(user.org_id)
+    access_token = create_access_token(org_id_str)
+    refresh_token = await create_refresh_token(org_id_str)
+    track("user_login", org_id_str, {"method": "email"})
+
+    return {
+        "access_token": access_token,
+        "token_type": "bearer",
+        "expires_in": 900,
+        "refresh_token": refresh_token,
+        "org_id": org_id_str,
+    }
+
+
+# ─── JWT issuance (legacy org_id + secret) ────────────────────────────────────
 
 class TokenRequest(BaseModel):
     org_id: str
@@ -61,12 +173,10 @@ async def issue_token(request: Request, payload: TokenRequest):
     stored_hash: str | None = org.settings.get("api_key_hash")
 
     if stored_hash:
-        # Per-org API key is set — validate against stored hash
         if not verify_api_key(payload.secret, stored_hash):
             logger.warning("failed auth attempt", extra={"org_id": payload.org_id, "ip": request.client.host if request.client else "unknown"})
             raise HTTPException(status_code=401, detail="Invalid credentials")
     else:
-        # No per-org key yet — fall back to master secret (dev mode)
         if payload.secret != settings.secret_key:
             raise HTTPException(status_code=401, detail="Invalid credentials")
 
@@ -77,15 +187,14 @@ async def issue_token(request: Request, payload: TokenRequest):
     return {
         "access_token": access_token,
         "token_type": "bearer",
-        "expires_in": 900,  # 15 minutes
+        "expires_in": 900,
         "refresh_token": refresh_token,
     }
 
 
 @router.post("/refresh")
 async def refresh_token_endpoint(payload: RefreshRequest):
-    """Rotate a refresh token — returns a new access token and a new refresh token.
-    The old refresh token is invalidated immediately (one-time use)."""
+    """Rotate a refresh token — returns a new access token and a new refresh token."""
     result = await rotate_refresh_token(payload.refresh_token)
     if not result:
         raise HTTPException(status_code=401, detail="Refresh token invalid or expired")

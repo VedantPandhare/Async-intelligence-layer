@@ -39,7 +39,6 @@ export async function apiFetch<T>(path: string, init: RequestInit = {}): Promise
 
   let res = await doFetch();
 
-  // On 401, attempt a single token refresh then retry
   if (res.status === 401) {
     if (!_refreshPromise) {
       _refreshPromise = _tryRefresh().finally(() => { _refreshPromise = null; });
@@ -56,7 +55,43 @@ export async function apiFetch<T>(path: string, init: RequestInit = {}): Promise
   return res.json() as Promise<T>;
 }
 
-// ─── Typed helpers ────────────────────────────────────────────────────────────
+// ─── Auth helpers ─────────────────────────────────────────────────────────────
+
+export async function loginWithEmail(
+  email: string,
+  password: string,
+): Promise<{ access_token: string; refresh_token: string; org_id: string; expires_in: number }> {
+  const res = await fetch(`${BASE}/auth/login`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email, password }),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.detail || "Invalid email or password");
+  }
+  return res.json();
+}
+
+export async function registerUser(payload: {
+  name: string;
+  email: string;
+  password: string;
+  org_name: string;
+}): Promise<{ access_token: string; refresh_token: string; org_id: string; expires_in: number }> {
+  const res = await fetch(`${BASE}/auth/register`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.detail || "Registration failed");
+  }
+  return res.json();
+}
+
+// ─── Types ────────────────────────────────────────────────────────────────────
 
 export type Digest = {
   id: string;

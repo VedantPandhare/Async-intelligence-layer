@@ -2,12 +2,13 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 import { setToken, setOrgId } from "@/lib/auth";
 
 export default function LoginPage() {
   const router = useRouter();
-  const [orgId, setOrgIdState] = useState("");
-  const [secret, setSecret] = useState("");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
@@ -18,20 +19,20 @@ export default function LoginPage() {
 
     try {
       const base = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
-      const res = await fetch(`${base}/auth/token`, {
+      const res = await fetch(`${base}/auth/login`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ org_id: orgId, secret }),
+        body: JSON.stringify({ email, password }),
       });
 
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
-        throw new Error(body.detail || "Invalid credentials");
+        throw new Error(body.detail || "Invalid email or password");
       }
 
       const data = await res.json();
       setToken(data.access_token);
-      setOrgId(orgId);
+      setOrgId(data.org_id);
       if (data.refresh_token) {
         localStorage.setItem("refresh_token", data.refresh_token);
       }
@@ -44,64 +45,81 @@ export default function LoginPage() {
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center px-4">
-      <div className="w-full max-w-sm">
-        <div className="text-center mb-8">
-          <div className="inline-flex items-center justify-center w-12 h-12 rounded-xl bg-brand-600 mb-4">
-            <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
-                d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+    <div className="min-h-screen bg-slate-950 flex flex-col">
+      {/* Header */}
+      <header className="h-14 border-b border-white/5 flex items-center px-6">
+        <Link href="/" className="flex items-center gap-2.5">
+          <div className="w-6 h-6 bg-white rounded flex items-center justify-center shrink-0">
+            <svg className="w-3.5 h-3.5 text-slate-950" fill="currentColor" viewBox="0 0 24 24">
+              <path d="M13 10V3L4 14h7v7l9-11h-7z" />
             </svg>
           </div>
-          <h1 className="text-2xl font-bold">Async Intelligence</h1>
-          <p className="text-slate-400 text-sm mt-1">Sign in to your workspace</p>
+          <span className="text-sm font-semibold tracking-tight">Async Intel</span>
+        </Link>
+      </header>
+
+      {/* Form */}
+      <div className="flex-1 flex items-center justify-center px-4 py-12">
+        <div className="w-full max-w-sm">
+          <div className="mb-8">
+            <h1 className="text-2xl font-bold tracking-tight text-white">Welcome back</h1>
+            <p className="text-slate-500 text-sm mt-1.5">Sign in to your workspace</p>
+          </div>
+
+          <form onSubmit={handleSubmit} className="space-y-4">
+            <div>
+              <label className="label">Email address</label>
+              <input
+                className="input"
+                type="email"
+                placeholder="you@company.com"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                required
+                autoComplete="email"
+              />
+            </div>
+
+            <div>
+              <div className="flex items-center justify-between mb-1.5">
+                <label className="label mb-0">Password</label>
+              </div>
+              <input
+                className="input"
+                type="password"
+                placeholder="••••••••"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                required
+                autoComplete="current-password"
+              />
+            </div>
+
+            {error && (
+              <div className="text-sm text-red-400 bg-red-950/40 border border-red-900/50 rounded-lg px-3 py-2.5">
+                {error}
+              </div>
+            )}
+
+            <button
+              type="submit"
+              className="btn-primary w-full justify-center py-2.5 mt-2"
+              disabled={loading}
+            >
+              {loading && (
+                <span className="w-4 h-4 border-2 border-slate-400 border-t-slate-950 rounded-full animate-spin" />
+              )}
+              Sign in
+            </button>
+          </form>
+
+          <p className="text-center text-sm text-slate-600 mt-6">
+            Don&apos;t have an account?{" "}
+            <Link href="/register" className="text-slate-400 hover:text-white transition-colors">
+              Create workspace
+            </Link>
+          </p>
         </div>
-
-        <form onSubmit={handleSubmit} className="card space-y-4">
-          <div>
-            <label className="block text-xs font-medium text-slate-400 mb-1.5">
-              Organisation ID
-            </label>
-            <input
-              className="input"
-              placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
-              value={orgId}
-              onChange={(e) => setOrgIdState(e.target.value)}
-              required
-            />
-          </div>
-
-          <div>
-            <label className="block text-xs font-medium text-slate-400 mb-1.5">
-              Secret key
-            </label>
-            <input
-              className="input"
-              type="password"
-              placeholder="••••••••••••••••"
-              value={secret}
-              onChange={(e) => setSecret(e.target.value)}
-              required
-            />
-          </div>
-
-          {error && (
-            <p className="text-sm text-red-400 bg-red-900/20 border border-red-800 rounded-lg px-3 py-2">
-              {error}
-            </p>
-          )}
-
-          <button type="submit" className="btn-primary w-full justify-center" disabled={loading}>
-            {loading ? (
-              <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-            ) : null}
-            Sign in
-          </button>
-        </form>
-
-        <p className="text-center text-xs text-slate-600 mt-4">
-          Use the <code className="text-slate-500">SECRET_KEY</code> from your <code className="text-slate-500">.env</code> file
-        </p>
       </div>
     </div>
   );

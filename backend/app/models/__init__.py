@@ -5,6 +5,7 @@ from .digest import Digest
 from .blocker import Blocker
 from .integration import Integration
 from .dep_conflict import DepConflict
+from .user import User
 
 __all__ = [
     "Organization",
@@ -14,4 +15,5 @@ __all__ = [
     "Blocker",
     "Integration",
     "DepConflict",
+    "User",
 ]
