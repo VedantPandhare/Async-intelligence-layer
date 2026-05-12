@@ -212,8 +212,8 @@ async def jira_connect(org_id: str):
         f"https://auth.atlassian.com/authorize"
         f"?audience=api.atlassian.com"
         f"&client_id={settings.jira_client_id}"
-        f"&scope=read:jira-data"
-        f"&redirect_uri=http://localhost:8000/auth/jira/callback"
+        f"&scope=read:jira-work"
+        f"&redirect_uri={settings.base_url}/auth/jira/callback"
         f"&state={state}"
         f"&response_type=code"
         f"&prompt=consent"
@@ -233,7 +233,7 @@ async def jira_callback(code: str, state: str = Query(...)):
                 "client_id": settings.jira_client_id,
                 "client_secret": settings.jira_client_secret,
                 "code": code,
-                "redirect_uri": "http://localhost:8000/auth/jira/callback",
+                "redirect_uri": f"{settings.base_url}/auth/jira/callback",
             },
         )
         resp.raise_for_status()

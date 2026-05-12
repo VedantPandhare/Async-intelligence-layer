@@ -75,7 +75,10 @@ async def trigger_digest(
         "errors": [],
         "should_intervene": False,
     }
-    result = await pipeline.ainvoke(initial_state)
+    try:
+        result = await pipeline.ainvoke(initial_state)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Pipeline error: {exc}")
 
     await persist_pipeline_results(result)
 

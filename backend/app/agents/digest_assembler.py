@@ -9,7 +9,8 @@ def digest_assembler_node(state: AgentState) -> AgentState:
     No LLM call needed here.
     """
     lines: list[str] = []
-    date_str = datetime.utcnow().strftime("%A, %B %-d") if hasattr(datetime, "strftime") else datetime.utcnow().strftime("%A, %B %d").lstrip("0")
+    now = datetime.utcnow()
+    date_str = f"{now.strftime('%A, %B')} {now.day}"
 
     lines.append(f"*🗓 Team Digest — {date_str}*\n")
 
