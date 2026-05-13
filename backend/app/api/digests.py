@@ -82,14 +82,28 @@ async def trigger_digest(
 
     await persist_pipeline_results(result)
 
-    digest = Digest(
-        id=uuid.uuid4(),
-        org_id=uuid.UUID(org_id),
-        digest_date=date.today(),
-        content=result,
-        markdown_output=result.get("final_digest", ""),
+    from datetime import datetime, timezone
+    today = date.today()
+    existing = await db.execute(
+        select(Digest).where(
+            Digest.org_id == uuid.UUID(org_id),
+            Digest.digest_date == today,
+        )
     )
-    db.add(digest)
+    digest = existing.scalar_one_or_none()
+    if digest:
+        digest.content = result
+        digest.markdown_output = result.get("final_digest", "")
+        digest.generated_at = datetime.now(timezone.utc)
+    else:
+        digest = Digest(
+            id=uuid.uuid4(),
+            org_id=uuid.UUID(org_id),
+            digest_date=today,
+            content=result,
+            markdown_output=result.get("final_digest", ""),
+        )
+        db.add(digest)
     await db.flush()
 
     blockers_found = len(result.get("blockers", []))

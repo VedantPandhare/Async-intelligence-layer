@@ -99,7 +99,11 @@ async def update_settings(
     if payload.slack_channel is not None:
         updates["slack_channel"] = payload.slack_channel
     if payload.github_org is not None:
-        updates["github_org"] = payload.github_org.strip()
+        raw = payload.github_org.strip()
+        # Accept full URLs like https://github.com/Club-Syndicate — extract just the slug
+        if "/" in raw:
+            raw = raw.rstrip("/").split("/")[-1]
+        updates["github_org"] = raw
     if payload.github_repos is not None:
         updates["github_repos"] = [r.strip() for r in payload.github_repos if r.strip()]
     if payload.slack_read_channels is not None:

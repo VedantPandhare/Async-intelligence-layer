@@ -18,6 +18,7 @@ export default function DevelopersPage() {
   const [developers, setDevelopers] = useState<Developer[]>([]);
   const [loading, setLoading] = useState(true);
   const [toggling, setToggling] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState<string | null>(null);
   const [error, setError] = useState("");
   const [showAll, setShowAll] = useState(false);
   const orgId = getOrgId();
@@ -31,6 +32,20 @@ export default function DevelopersPage() {
       setError(String(err));
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function deleteDeveloper(dev: Developer) {
+    if (!orgId) return;
+    if (!confirm(`Remove ${dev.name} from this workspace?`)) return;
+    setDeleting(dev.id);
+    try {
+      await apiFetch(`/developers/${orgId}/${dev.id}`, { method: "DELETE" });
+      setDevelopers((prev) => prev.filter((d) => d.id !== dev.id));
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      setDeleting(null);
     }
   }
 
@@ -119,7 +134,7 @@ export default function DevelopersPage() {
                 <button
                   onClick={() => toggleActive(dev)}
                   disabled={toggling === dev.id}
-                  className={dev.is_active ? "btn-danger text-xs px-3" : "btn-secondary text-xs px-3 text-green-400"}
+                  className={dev.is_active ? "btn-secondary text-xs px-3" : "btn-secondary text-xs px-3 text-green-400"}
                 >
                   {toggling === dev.id ? (
                     <Spinner className="w-3 h-3" />
@@ -127,6 +142,18 @@ export default function DevelopersPage() {
                     "Opt out"
                   ) : (
                     "Opt in"
+                  )}
+                </button>
+                <button
+                  onClick={() => deleteDeveloper(dev)}
+                  disabled={deleting === dev.id}
+                  className="btn-ghost text-xs px-2 text-slate-600 hover:text-red-400"
+                  title="Remove from workspace"
+                >
+                  {deleting === dev.id ? <Spinner className="w-3 h-3" /> : (
+                    <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                    </svg>
                   )}
                 </button>
               </div>

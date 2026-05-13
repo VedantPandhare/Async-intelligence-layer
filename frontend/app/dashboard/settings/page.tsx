@@ -152,6 +152,10 @@ function SettingsContent() {
   const [savingGh, setSavingGh] = useState(false);
   const [importingDevs, setImportingDevs] = useState(false);
   const [importResult, setImportResult] = useState<ImportResult | null>(null);
+  const [importError, setImportError] = useState("");
+
+  // Computed — true whenever GitHub is connected but the stored token lacks read:org
+  const needsReconnect = github.connected && !(github.metadata?.scope ?? "").includes("read:org");
 
   // Slack config form
   const [slackForm, setSlackForm] = useState({ slack_channel: "", slack_read_channels: "" });
@@ -254,12 +258,17 @@ function SettingsContent() {
     if (!orgId) return;
     setImportingDevs(true);
     setImportResult(null);
+    setImportError("");
     try {
       const result = await importFromGitHub(orgId);
       setImportResult(result);
-      showToast(`Imported ${result.imported} developers`);
+      showToast(`Imported ${result.imported} developer${result.imported !== 1 ? "s" : ""}`);
     } catch (err) {
-      showToast(`Import failed: ${err instanceof Error ? err.message : String(err)}`);
+      const msg = err instanceof Error ? err.message : String(err);
+      if (!msg.includes("MISSING_READ_ORG_SCOPE")) {
+        setImportError(msg);
+      }
+      // If MISSING_READ_ORG_SCOPE: needsReconnect is computed from github.metadata.scope automatically
     } finally { setImportingDevs(false); }
   }
 
@@ -336,17 +345,52 @@ function SettingsContent() {
           disconnecting={disconnecting === "github"}
         >
           <form onSubmit={saveGitHub} className="space-y-4">
+            {/* Reconnect warning — shown when token lacks read:org */}
+            {needsReconnect && (
+              <div className="bg-orange-950/30 border border-orange-900/50 rounded-lg p-3.5 flex items-start gap-3">
+                <svg className="w-4 h-4 text-orange-400 mt-0.5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
+                </svg>
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm text-orange-300 font-medium">GitHub reconnect needed</p>
+                  <p className="text-xs text-orange-400/80 mt-0.5">
+                    Your GitHub token is missing <code className="font-mono">read:org</code> permission (it was connected before this scope was added).
+                    Disconnect and reconnect to fix it.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => handleConnect("github")}
+                  disabled={connectingGh}
+                  className="btn-secondary text-xs px-3 py-1.5 shrink-0"
+                >
+                  {connectingGh ? <Spinner className="w-3 h-3" /> : "Reconnect"}
+                </button>
+              </div>
+            )}
+
             <div className="grid grid-cols-2 gap-4">
               <div>
-                <label className="label">GitHub org / username</label>
+                <label className="label">GitHub organisation</label>
                 <input
                   className="input"
-                  placeholder="acme-inc"
+                  placeholder="Club-Syndicate"
                   value={ghForm.github_org}
-                  onChange={(e) => setGhForm((f) => ({ ...f, github_org: e.target.value }))}
+                  onChange={(e) => {
+                    setGhForm((f) => ({ ...f, github_org: e.target.value }));
+                    setImportResult(null);
+                    setImportError("");
+                  }}
+                  list="gh-orgs-list"
                 />
+                {/* datalist provides autocomplete from OAuth metadata without hiding the input */}
+                <datalist id="gh-orgs-list">
+                  {(github.metadata?.github_orgs ?? []).map((o) => (
+                    <option key={o} value={o} />
+                  ))}
+                </datalist>
                 <p className="text-xs text-slate-700 mt-1">
-                  Used for team import and scoping events
+                  Org slug from github.com/your-org
                 </p>
               </div>
               <div>
@@ -358,7 +402,7 @@ function SettingsContent() {
                   onChange={(e) => setGhForm((f) => ({ ...f, github_repos: e.target.value }))}
                 />
                 <p className="text-xs text-slate-700 mt-1">
-                  Comma-separated repo names. Leave empty to watch all.
+                  Comma-separated. Leave empty to watch all.
                 </p>
               </div>
             </div>
@@ -366,7 +410,7 @@ function SettingsContent() {
             <div className="flex items-center gap-3">
               <button type="submit" className="btn-secondary text-xs" disabled={savingGh}>
                 {savingGh && <Spinner className="w-3 h-3" />}
-                Save GitHub config
+                Save config
               </button>
 
               <button
@@ -380,9 +424,39 @@ function SettingsContent() {
               </button>
             </div>
 
-            {importResult && (
+            {importError && (
+              <p className="text-xs text-red-400">{importError}</p>
+            )}
+
+            {importResult && importResult.imported === 0 && importResult.skipped === 0 && (
+              <div className="bg-slate-800/60 border border-slate-700 rounded-lg p-3 text-xs text-slate-400 space-y-1.5">
+                <p className="font-medium text-slate-300">GitHub returned 0 members — possible causes:</p>
+                <ul className="space-y-1 list-disc list-inside text-slate-500">
+                  <li>The org has restricted third-party app access (most common)</li>
+                  <li>The org name is wrong or doesn&apos;t exist</li>
+                  <li>All members have private profiles</li>
+                </ul>
+                <p className="pt-1">To grant access, visit the org&apos;s OAuth policy page:</p>
+                <a
+                  href={`https://github.com/organizations/${ghForm.github_org}/settings/oauth_application_policy`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-blue-400 hover:text-blue-300 underline break-all"
+                >
+                  github.com/organizations/{ghForm.github_org}/settings/oauth_application_policy
+                </a>
+                <p className="text-slate-500 pt-1">After granting access, click &quot;Import teammates&quot; again.</p>
+              </div>
+            )}
+            {importResult && importResult.skipped > 0 && importResult.imported === 0 && (
+              <p className="text-xs text-slate-500">
+                {importResult.skipped} developer{importResult.skipped !== 1 ? "s" : ""} already in your workspace
+              </p>
+            )}
+
+            {importResult && importResult.imported > 0 && (
               <p className="text-xs text-green-400">
-                ✓ Imported {importResult.imported} developers
+                ✓ Imported {importResult.imported} developer{importResult.imported !== 1 ? "s" : ""}
                 {importResult.skipped > 0 && `, ${importResult.skipped} already existed`}
               </p>
             )}

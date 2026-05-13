@@ -51,7 +51,7 @@ async def create_developer(
 @router.get("/{org_id}")
 async def list_developers(org_id: str, db: AsyncSession = Depends(get_db_dep)):
     result = await db.execute(
-        select(Developer).where(Developer.org_id == uuid.UUID(org_id), Developer.is_active.is_(True))
+        select(Developer).where(Developer.org_id == uuid.UUID(org_id))
     )
     devs = result.scalars().all()
     return [
@@ -62,6 +62,7 @@ async def list_developers(org_id: str, db: AsyncSession = Depends(get_db_dep)):
             "github_username": d.github_username,
             "slack_user_id": d.slack_user_id,
             "role": d.role,
+            "is_active": d.is_active,
         }
         for d in devs
     ]
@@ -88,6 +89,19 @@ async def get_developer(org_id: str, dev_id: str, db: AsyncSession = Depends(get
         "role": dev.role,
         "is_active": dev.is_active,
     }
+
+
+@router.delete("/{org_id}/{dev_id}", status_code=200)
+async def delete_developer(
+    org_id: str,
+    dev_id: str,
+    db: AsyncSession = Depends(get_db_dep),
+    _: str = Depends(get_current_org),
+):
+    dev = await _get_dev(org_id, dev_id, db)
+    await db.delete(dev)
+    await db.flush()
+    return {"status": "deleted", "developer_id": dev_id}
 
 
 @router.patch("/{org_id}/{dev_id}/opt-out", status_code=200)
@@ -188,37 +202,91 @@ async def import_from_github(
             detail="GitHub org not configured. Set 'GitHub Org' in Settings first.",
         )
 
+    # Strip full URLs — accept "https://github.com/Club-Syndicate" or "github.com/Club-Syndicate"
+    if "/" in github_org:
+        github_org = github_org.rstrip("/").split("/")[-1]
+
+    # Check that the stored token has read:org scope.
+    # If scope is empty (connected before scope tracking) or missing read:org — surface clearly.
+    stored_scope = integration.metadata_.get("scope", "")
+    if "read:org" not in stored_scope:
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "MISSING_READ_ORG_SCOPE: Your GitHub token doesn't include the read:org "
+                "permission. Disconnect GitHub and reconnect to grant org member access."
+            ),
+        )
+
     gh_headers = {
         "Authorization": f"token {token}",
         "Accept": "application/vnd.github+json",
         "X-GitHub-Api-Version": "2022-11-28",
     }
 
-    # Fetch org members
+    # Collect all GitHub usernames to import
+    usernames_to_import: set[str] = set()
+
     async with httpx.AsyncClient(headers=gh_headers, timeout=30) as client:
-        resp = await client.get(
+        # Strategy 1: GitHub Organisation members (filter=all includes owners + members)
+        # Strategy 1: standard org members API
+        org_resp = await client.get(
             f"{GITHUB_API}/orgs/{github_org}/members",
-            params={"per_page": 100},
+            params={"per_page": 100, "role": "all"},
         )
-        if resp.status_code == 404:
-            raise HTTPException(
-                status_code=400,
-                detail=f"GitHub org '{github_org}' not found or the token lacks read:org access.",
+        if org_resp.status_code == 200:
+            for m in org_resp.json():
+                login = m.get("login", "")
+                if login and m.get("type", "User") == "User":
+                    usernames_to_import.add(login)
+            logger.info(
+                "github org members fetched",
+                extra={"org": github_org, "count": len(usernames_to_import)},
             )
-        if resp.status_code != 200:
-            raise HTTPException(status_code=502, detail=f"GitHub API error: {resp.status_code}")
-        members = resp.json()
+        else:
+            logger.warning(
+                "github org members API failed",
+                extra={"org": github_org, "status": org_resp.status_code, "body": org_resp.text[:300]},
+            )
+
+        # Strategy 2: GitHub Search API — works even when the org requires OAuth app approval
+        # or has private membership settings. Returns all publicly discoverable members.
+        if not usernames_to_import:
+            logger.info("org members API returned empty, trying search API fallback", extra={"org": github_org})
+            try:
+                search_resp = await client.get(
+                    f"{GITHUB_API}/search/users",
+                    params={"q": f"org:{github_org}", "per_page": 100},
+                )
+                if search_resp.status_code == 200:
+                    for user in search_resp.json().get("items", []):
+                        login = user.get("login", "")
+                        # Skip org accounts — only import real GitHub users
+                        if login and user.get("type") == "User":
+                            usernames_to_import.add(login)
+                    logger.info(
+                        "github search fallback fetched",
+                        extra={"org": github_org, "count": len(usernames_to_import)},
+                    )
+                else:
+                    logger.warning(
+                        "github search fallback failed",
+                        extra={"org": github_org, "status": search_resp.status_code},
+                    )
+            except Exception as exc:
+                logger.warning("github search fallback exception", extra={"org": github_org, "error": str(exc)})
+
+        # Strategy 3: Always include the connected GitHub user themselves
+        connected_username = integration.metadata_.get("github_username", "")
+        if connected_username:
+            usernames_to_import.add(connected_username)
 
     imported: list[dict] = []
     skipped: list[str] = []
 
     async with httpx.AsyncClient(headers=gh_headers, timeout=30) as client:
-        for member in members:
-            username: str = member.get("login", "")
-            if not username:
-                continue
-
-            # Skip if already exists for this org
+        for username in sorted(usernames_to_import):
+            # Skip if developer with this github_username already exists for this org
             existing = await db.execute(
                 select(Developer).where(
                     Developer.org_id == uuid.UUID(org_id),
@@ -239,7 +307,10 @@ async def import_from_github(
                     name = user_data.get("name") or username
                     email = user_data.get("email") or None
             except Exception as exc:
-                logger.warning("github user detail fetch failed", extra={"username": username, "error": str(exc)})
+                logger.warning(
+                    "github user detail fetch failed",
+                    extra={"username": username, "error": str(exc)},
+                )
 
             dev = Developer(
                 id=uuid.uuid4(),
