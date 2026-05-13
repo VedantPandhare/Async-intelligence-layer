@@ -21,7 +21,8 @@ class NormalizedEvent:
 def normalize_github_commit(raw: dict, developer_id: str, org_id: str) -> NormalizedEvent:
     commit_data = raw.get("commit", raw)
     author = commit_data.get("author", {})
-    date_str = author.get("date") or raw.get("committed_date", "")
+    # PushEvent commits have no author.date — fall back to the event's created_at (pushed_at)
+    date_str = author.get("date") or raw.get("pushed_at") or raw.get("committed_date", "")
 
     try:
         event_time = datetime.fromisoformat(date_str.replace("Z", "+00:00"))
@@ -181,14 +182,26 @@ async def store_event(event: NormalizedEvent, db: AsyncSession) -> ActivityEvent
     if et.tzinfo is None:
         et = et.replace(tzinfo=_tz.utc)
 
-    existing = await db.execute(
-        sa_select(AE).where(
-            AE.developer_id == _uuid.UUID(event.developer_id),
-            AE.event_type == event.event_type,
-            AE.event_time == et,
-            AE.source == event.source,
+    # Dedup: commits use SHA (timestamps from PushEvent are unreliable); others use time
+    sha = event.payload.get("sha", "") if event.event_type == "commit" else ""
+    if sha:
+        existing = await db.execute(
+            sa_select(AE).where(
+                AE.developer_id == _uuid.UUID(event.developer_id),
+                AE.source == event.source,
+                AE.event_type == event.event_type,
+                AE.payload["sha"].astext == sha,
+            )
         )
-    )
+    else:
+        existing = await db.execute(
+            sa_select(AE).where(
+                AE.developer_id == _uuid.UUID(event.developer_id),
+                AE.event_type == event.event_type,
+                AE.event_time == et,
+                AE.source == event.source,
+            )
+        )
     dupe = existing.scalar_one_or_none()
     if dupe:
         return dupe

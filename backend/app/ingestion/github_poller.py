@@ -166,11 +166,15 @@ async def _poll_developer(
                 repo_short = repo.split("/")[-1]
                 if repo not in allowed_repos and repo_short not in allowed_repos:
                     result["filtered"] += 1
+                    if repo not in result.get("filtered_repos", []):
+                        result.setdefault("filtered_repos", []).append(repo)
                     continue
 
             if etype == "PushEvent":
+                push_ts = event.get("created_at", "")
                 for commit in event.get("payload", {}).get("commits", []):
                     commit["repo"] = repo
+                    commit["pushed_at"] = push_ts  # PushEvent commits lack author.date
                     events.append(normalize_github_commit(commit, dev_id, org_id))
                     result["commits"].append({
                         "msg": commit.get("message", "")[:80],
