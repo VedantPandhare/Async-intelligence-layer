@@ -1,15 +1,18 @@
 import json
 import re
 
-from langchain_anthropic import ChatAnthropic
-from langchain_core.prompts import ChatPromptTemplate
+import anthropic
 
+from ..config import get_settings
 from .state import AgentState, InferredBlocker
 
-llm = ChatAnthropic(model="claude-sonnet-4-20250514", max_tokens=3000)
+MODEL = "claude-haiku-4-5-20251001"
 
-BLOCKER_PROMPT = ChatPromptTemplate.from_messages([
-    ("system", """You are an expert engineering team observer. Your job is to detect
+
+def _client() -> anthropic.AsyncAnthropic:
+    return anthropic.AsyncAnthropic(api_key=get_settings().anthropic_api_key)
+
+SYSTEM_PROMPT = """You are an expert engineering team observer. Your job is to detect
 real blockers from behavioral signals — NOT self-reported status.
 
 A blocker is inferred when you see COMBINATIONS of signals, never one signal alone.
@@ -23,10 +26,18 @@ Strong blocker patterns:
 For each developer, return a JSON array of blockers. If no blocker, return empty array.
 Severity: critical (blocks sprint), high (blocks today), medium (slows work), low (minor friction).
 
-Return ONLY valid JSON. No prose."""),
-    ("human", """Analyze these developer signals for org {org_id} on {digest_date}:
+Return ONLY valid JSON. No prose."""
 
-{signals_json}
+
+async def blocker_inference_node(state: AgentState) -> AgentState:
+    if not state.get("developer_signals"):
+        return {**state, "blockers": []}
+
+    errors: list[str] = list(state.get("errors", []))
+
+    user_msg = f"""Analyze these developer signals for org {state["org_id"]} on {state["digest_date"]}:
+
+{json.dumps(state["developer_signals"], indent=2)}
 
 Return JSON array of blockers:
 [{{
@@ -36,25 +47,16 @@ Return JSON array of blockers:
   "description": "Plain English explanation of what the blocker is",
   "signals": ["list", "of", "evidence"],
   "suggested_action": "Who should do what to unblock"
-}}]"""),
-])
-
-
-async def blocker_inference_node(state: AgentState) -> AgentState:
-    if not state.get("developer_signals"):
-        return {**state, "blockers": []}
-
-    errors: list[str] = list(state.get("errors", []))
+}}]"""
 
     try:
-        chain = BLOCKER_PROMPT | llm
-        response = await chain.ainvoke({
-            "org_id": state["org_id"],
-            "digest_date": state["digest_date"],
-            "signals_json": json.dumps(state["developer_signals"], indent=2),
-        })
-
-        content = response.content
+        response = await _client().messages.create(
+            model=MODEL,
+            max_tokens=3000,
+            system=SYSTEM_PROMPT,
+            messages=[{"role": "user", "content": user_msg}],
+        )
+        content = response.content[0].text
         try:
             blockers: list[InferredBlocker] = json.loads(content)
         except json.JSONDecodeError:

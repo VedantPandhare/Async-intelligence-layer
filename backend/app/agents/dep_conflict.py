@@ -2,32 +2,22 @@ import json
 import re
 from itertools import combinations
 
-from langchain_anthropic import ChatAnthropic
-from langchain_core.prompts import ChatPromptTemplate
+import anthropic
 
+from ..config import get_settings
 from .state import AgentState, DependencyConflict
 
-llm = ChatAnthropic(model="claude-sonnet-4-20250514", max_tokens=2000)
+MODEL = "claude-haiku-4-5-20251001"
 
-DEP_CONFLICT_PROMPT = ChatPromptTemplate.from_messages([
-    ("system", """You detect dependency conflicts between developers working in parallel.
+
+def _client() -> anthropic.AsyncAnthropic:
+    return anthropic.AsyncAnthropic(api_key=get_settings().anthropic_api_key)
+
+SYSTEM_PROMPT = """You detect dependency conflicts between developers working in parallel.
 A conflict exists when two devs are touching the same files, API endpoints, DB tables,
 or services in ways that will likely cause merge conflicts or integration issues.
 
-Return JSON array only. Empty array if no conflicts."""),
-    ("human", """Check these developer pairs for conflicts:
-
-{pairs_json}
-
-Return:
-[{{
-  "developer_a": "name",
-  "developer_b": "name",
-  "conflict_type": "same_file|same_api|same_service|same_schema",
-  "files_or_services": ["list of overlapping items"],
-  "risk": "Will conflict on merge|May conflict|Low risk but coordinate"
-}}]"""),
-])
+Return JSON array only. Empty array if no conflicts."""
 
 
 async def dep_conflict_node(state: AgentState) -> AgentState:
@@ -52,11 +42,27 @@ async def dep_conflict_node(state: AgentState) -> AgentState:
     if not pairs:
         return {**state, "conflicts": []}
 
-    try:
-        chain = DEP_CONFLICT_PROMPT | llm
-        response = await chain.ainvoke({"pairs_json": json.dumps(pairs, indent=2)})
+    user_msg = f"""Check these developer pairs for conflicts:
 
-        content = response.content
+{json.dumps(pairs, indent=2)}
+
+Return:
+[{{
+  "developer_a": "name",
+  "developer_b": "name",
+  "conflict_type": "same_file|same_api|same_service|same_schema",
+  "files_or_services": ["list of overlapping items"],
+  "risk": "Will conflict on merge|May conflict|Low risk but coordinate"
+}}]"""
+
+    try:
+        response = await _client().messages.create(
+            model=MODEL,
+            max_tokens=2000,
+            system=SYSTEM_PROMPT,
+            messages=[{"role": "user", "content": user_msg}],
+        )
+        content = response.content[0].text
         try:
             conflicts: list[DependencyConflict] = json.loads(content)
         except json.JSONDecodeError:

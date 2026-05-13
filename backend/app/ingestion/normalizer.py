@@ -170,15 +170,36 @@ def normalize_jira_issue(raw: dict, developer_id: str, org_id: str) -> Normalize
 
 
 async def store_event(event: NormalizedEvent, db: AsyncSession) -> ActivityEvent:
-    """Persist a NormalizedEvent to activity_events table."""
-    import uuid
+    """Persist a NormalizedEvent to activity_events table, skipping exact duplicates."""
+    import uuid as _uuid
+    from datetime import timezone as _tz
+    from sqlalchemy import select as sa_select
+    from ..models.activity_event import ActivityEvent as AE
+
+    # Ensure event_time is timezone-aware (DB column is TIMESTAMPTZ)
+    et = event.event_time
+    if et.tzinfo is None:
+        et = et.replace(tzinfo=_tz.utc)
+
+    existing = await db.execute(
+        sa_select(AE).where(
+            AE.developer_id == _uuid.UUID(event.developer_id),
+            AE.event_type == event.event_type,
+            AE.event_time == et,
+            AE.source == event.source,
+        )
+    )
+    dupe = existing.scalar_one_or_none()
+    if dupe:
+        return dupe
+
     record = ActivityEvent(
-        id=uuid.uuid4(),
-        developer_id=uuid.UUID(event.developer_id),
-        org_id=uuid.UUID(event.org_id),
+        id=_uuid.uuid4(),
+        developer_id=_uuid.UUID(event.developer_id),
+        org_id=_uuid.UUID(event.org_id),
         source=event.source,
         event_type=event.event_type,
-        event_time=event.event_time,
+        event_time=et,
         payload=event.payload,
         summary=event.summary,
     )

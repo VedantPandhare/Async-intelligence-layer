@@ -1,18 +1,17 @@
-import json
+import anthropic
 
-from langchain_anthropic import ChatAnthropic
-from langchain_core.prompts import ChatPromptTemplate
-
+from ..config import get_settings
 from .state import AgentState
 
-llm = ChatAnthropic(model="claude-sonnet-4-20250514", max_tokens=500)
+MODEL = "claude-haiku-4-5-20251001"
 
-INTERVENTION_PROMPT = ChatPromptTemplate.from_messages([
-    ("system", """You write brief, friendly Slack DMs to unblock developers.
+
+def _client() -> anthropic.AsyncAnthropic:
+    return anthropic.AsyncAnthropic(api_key=get_settings().anthropic_api_key)
+
+SYSTEM_PROMPT = """You write brief, friendly Slack DMs to unblock developers.
 The message should feel like a helpful colleague checking in — NOT a manager pinging for a status update.
-Keep it under 3 sentences. Offer concrete help. Suggest who to talk to. Never be accusatory."""),
-    ("human", "Write a Slack DM to {developer_name} about this blocker: {blocker_description}\nSuggested action: {suggested_action}"),
-])
+Keep it under 3 sentences. Offer concrete help. Suggest who to talk to. Never be accusatory."""
 
 
 async def intervention_node(state: AgentState) -> AgentState:
@@ -21,7 +20,6 @@ async def intervention_node(state: AgentState) -> AgentState:
         return state
 
     dev_map = {d["developer_id"]: d for d in state.get("developer_signals", [])}
-    chain = INTERVENTION_PROMPT | llm
     errors: list[str] = list(state.get("errors", []))
 
     for blocker in critical_blockers:
@@ -29,16 +27,19 @@ async def intervention_node(state: AgentState) -> AgentState:
         if not dev:
             continue
         try:
-            response = await chain.ainvoke({
-                "developer_name": dev["developer_name"],
-                "blocker_description": blocker["description"],
-                "suggested_action": blocker["suggested_action"],
-            })
-            # Delivery handled by slack_delivery — import here to avoid circular deps
+            response = await _client().messages.create(
+                model=MODEL,
+                max_tokens=500,
+                system=SYSTEM_PROMPT,
+                messages=[{"role": "user", "content": (
+                    f"Write a Slack DM to {dev['developer_name']} about this blocker: "
+                    f"{blocker['description']}\nSuggested action: {blocker['suggested_action']}"
+                )}],
+            )
             from ..delivery.slack_delivery import send_slack_dm
             await send_slack_dm(
                 developer_id=blocker["developer_id"],
-                message=response.content,
+                message=response.content[0].text,
             )
         except Exception as exc:
             errors.append(f"intervention for {blocker['developer_id']}: {exc}")
