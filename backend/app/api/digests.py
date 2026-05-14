@@ -79,7 +79,7 @@ async def trigger_digest(
     poll_summary: dict = {}
     try:
         from ..ingestion.github_poller import poll_github_for_org
-        poll_summary = await poll_github_for_org(org_id, since_hours=168)
+        poll_summary = await poll_github_for_org(org_id, since_hours=24)
     except Exception as exc:
         poll_summary = {"error": str(exc)}
 
@@ -369,7 +369,7 @@ async def diagnose(org_id: str, db: AsyncSession = Depends(get_db_dep)):
 
     try:
         from ..ingestion.github_poller import poll_github_for_org
-        await poll_github_for_org(org_id, since_hours=168)
+        await poll_github_for_org(org_id, since_hours=24)
         poll_result["status"] = "ok"
     except Exception as e:
         poll_result["status"] = "error"

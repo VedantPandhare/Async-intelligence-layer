@@ -15,7 +15,7 @@ async def signal_collector_node(state: AgentState) -> AgentState:
     aggregates per-developer behavioral metrics, and returns DeveloperSignals.
     """
     org_id = uuid.UUID(state["org_id"])
-    since = datetime.now(timezone.utc) - timedelta(days=7)
+    since = datetime.now(timezone.utc) - timedelta(hours=24)
     week_ago = datetime.now(timezone.utc) - timedelta(days=7)
     errors: list[str] = list(state.get("errors", []))
 

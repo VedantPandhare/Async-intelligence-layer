@@ -12,23 +12,19 @@ MODEL = "claude-haiku-4-5-20251001"
 def _client() -> anthropic.AsyncAnthropic:
     return anthropic.AsyncAnthropic(api_key=get_settings().anthropic_api_key)
 
-SYSTEM_PROMPT = """You write detailed, honest, human-sounding developer summaries
-for a team digest. You are writing for the team — not for management surveillance.
+SYSTEM_PROMPT = """You write developer digest summaries the way a senior engineer would describe a colleague's day to the rest of the team.
 
 Rules:
-- Each developer summary: 4-5 sentences
-- Sentence 1: What they worked on — name the EXACT repo and quote/paraphrase the actual commit message(s)
-- Sentence 2: Describe the scope of the work — mention files changed, additions/deletions if available, or what area of the codebase was touched
-- Sentence 3: Note their velocity — are they above or below their usual pace? (commit_velocity_delta > 0.3 = strong, < -0.3 = slow)
-- Sentence 4: Flag any blockers, CI failures, or silence concerns if present; if none, note what's going well
-- Sentence 5 (optional): Any coordination note — PRs opened, reviews given, tickets updated
-- Tone: like a senior engineer summarizing a colleague's week — specific, direct, no filler
-- ALWAYS use the exact repo name and exact commit message text from commits_today[].message and commits_today[].repo
-- If commits_today is empty but prs_opened is not, lead with the PR title and repo instead
-- Flag blockers with emoji: 🔴 critical, 🟡 attention needed, ✅ going well
-- Never say "it appears" or "seems to be" — state it plainly
-- Never say "No activity" when commits_today or prs_opened has data
-- Never mention surveillance or that you're watching behavior"""
+- 2-3 sentences per developer
+- Interpret the commits — describe WHAT was built or changed, not just list the commit message text.
+  Example: instead of "committed 'Add styled HTML contact form'", write "built a styled contact form on the frontend"
+- Group related commits into a single work area description. If someone pushed 3 README updates, say "updated the README" once, not three times.
+- Name the repo (from commits_today[].repo) so readers know the context
+- Mention PRs or CI failures only if present — skip the sentence entirely if not
+- Do NOT mention velocity, baselines, pace comparisons, silence hours, or data quality
+- Do NOT pad with phrases like "indicating sustained output", "showing active engagement", "it appears", "seems to be"
+- If commits_today is empty and prs_opened is empty: write exactly "No activity today."
+- Tone: one engineer telling another what their teammate shipped — specific, human, zero corporate fluff"""
 
 
 async def narrative_writer_node(state: AgentState) -> AgentState:
@@ -37,32 +33,24 @@ async def narrative_writer_node(state: AgentState) -> AgentState:
     if not state.get("developer_signals"):
         return {**state, "developer_narratives": {}, "sprint_risk": "No activity data available."}
 
-    user_msg = f"""Write detailed summaries for these developers based on their actual activity.
+    user_msg = f"""Summarise each developer's day based on their actual commits and PRs.
 
-Developer signals — commits_today[].message = real commit messages, commits_today[].repo = repo name,
-commits_today[].files_changed = list of files, commits_today[].additions / .deletions = line counts.
-Use ALL of this data to write a specific, grounded summary. Do not make anything up.
+Interpret the work — describe what was built or changed, not just the commit message text.
+Use the repo name from commits_today[].repo and derive meaning from commits_today[].message.
+2-3 sentences max. No velocity, no pace analysis.
 
 Developer signals:
 {json.dumps(state["developer_signals"], indent=2)}
 
-Inferred blockers:
+Blockers (mention only if present):
 {json.dumps(state.get("blockers", []), indent=2)}
-
-Dependency conflicts:
-{json.dumps(state.get("conflicts", []), indent=2)}
-
-Write 4-5 sentences per developer. Lead with the actual repo name and commit message.
-If files_changed lists specific files, mention 1-2 of them. Note velocity trend.
-
-Also write a 2-sentence sprint risk assessment covering the whole team.
 
 Return JSON only:
 {{
   "developer_summaries": {{
-    "<developer_id>": "<4-5 sentence summary with specific repo, commit messages, file details>"
+    "<developer_id>": "<2-3 sentence summary describing what was built>"
   }},
-  "sprint_risk": "<2 sentence overall team risk assessment>"
+  "sprint_risk": "<1 sentence: CI failures or blockers if any, otherwise 'No blockers.'>"
 }}"""
 
     try:

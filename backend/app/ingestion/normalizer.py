@@ -182,7 +182,8 @@ async def store_event(event: NormalizedEvent, db: AsyncSession) -> ActivityEvent
     if et.tzinfo is None:
         et = et.replace(tzinfo=_tz.utc)
 
-    # Dedup: commits use SHA (timestamps from PushEvent are unreliable); others use time
+    # Dedup: commits use SHA; others use time.
+    # Use .as_string() (maps to ->>) not cast() (maps to ->) — cast() wraps strings in quotes.
     sha = event.payload.get("sha", "") if event.event_type == "commit" else ""
     if sha:
         existing = await db.execute(
@@ -190,7 +191,7 @@ async def store_event(event: NormalizedEvent, db: AsyncSession) -> ActivityEvent
                 AE.developer_id == _uuid.UUID(event.developer_id),
                 AE.source == event.source,
                 AE.event_type == event.event_type,
-                AE.payload["sha"].astext == sha,
+                AE.payload["sha"].as_string() == sha,
             )
         )
     else:

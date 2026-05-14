@@ -118,6 +118,39 @@ async def poll_github_for_org(org_id: str, since_hours: int = 0) -> dict:
     return summary
 
 
+async def _fetch_repo_commits(
+    client: httpx.AsyncClient,
+    repo: str,
+    username: str,
+    since_iso: str,
+) -> list[dict]:
+    """
+    Fallback when PushEvent payload.commits is empty (private repo / non-distinct commits).
+    Calls GET /repos/{owner}/{repo}/commits directly and normalises the response
+    into the same shape that PushEvent payload commits use.
+    """
+    try:
+        resp = await client.get(
+            f"{GITHUB_API}/repos/{repo}/commits",
+            params={"author": username, "since": since_iso, "per_page": 30},
+        )
+        if resp.status_code != 200:
+            return []
+        raw = resp.json()
+        result = []
+        for item in raw:
+            c = item.get("commit", {})
+            result.append({
+                "sha": item.get("sha", "")[:8],
+                "message": c.get("message", ""),
+                "author": c.get("author", {}),
+                "pushed_at": c.get("author", {}).get("date", ""),
+            })
+        return result
+    except Exception:
+        return []
+
+
 async def _poll_developer(
     client: httpx.AsyncClient,
     dev: Developer,
@@ -129,15 +162,20 @@ async def _poll_developer(
     dev_id = str(dev.id)
     result = {
         "username": dev.github_username,
+        "raw_event_count": 0,
+        "event_types_seen": [],
+        "push_events_in_window": 0,
         "fetched": 0,
         "stored": 0,
         "filtered": 0,
+        "filtered_repos": [],
         "error": None,
         "commits": [],
     }
 
     events: list[NormalizedEvent] = []
 
+    # ── Step 1: fetch raw events from GitHub ──────────────────────────────────
     try:
         from .retry import with_retry
         resp = await with_retry(
@@ -145,17 +183,25 @@ async def _poll_developer(
             f"{GITHUB_API}/users/{dev.github_username}/events",
             params={"per_page": 50},
         )
-        if resp.status_code != 200:
-            result["error"] = f"github_api_{resp.status_code}: {resp.text[:200]}"
-            logger.warning("github events API non-200", extra={
-                "username": dev.github_username, "status": resp.status_code, "body": resp.text[:300],
-            })
-            return result
+    except Exception as exc:
+        result["error"] = f"http_error: {exc}"
+        return result
 
-        raw_events = resp.json()
-        logger.info("github events fetched", extra={"username": dev.github_username, "count": len(raw_events)})
+    if resp.status_code != 200:
+        result["error"] = f"github_api_{resp.status_code}"
+        return result
 
-        for event in raw_events:
+    raw_events = resp.json()
+    result["raw_event_count"] = len(raw_events)
+    type_counts: dict[str, int] = {}
+    for e in raw_events:
+        t = e.get("type", "Unknown")
+        type_counts[t] = type_counts.get(t, 0) + 1
+    result["event_types_seen"] = [f"{t}×{n}" for t, n in type_counts.items()]
+
+    # ── Step 2: parse events into NormalizedEvent objects ────────────────────
+    for event in raw_events:
+        try:
             etype = event.get("type")
             created = event.get("created_at", "")
             if created < since_iso:
@@ -166,23 +212,31 @@ async def _poll_developer(
                 repo_short = repo.split("/")[-1]
                 if repo not in allowed_repos and repo_short not in allowed_repos:
                     result["filtered"] += 1
-                    if repo not in result.get("filtered_repos", []):
-                        result.setdefault("filtered_repos", []).append(repo)
+                    if repo not in result["filtered_repos"]:
+                        result["filtered_repos"].append(repo)
                     continue
 
             if etype == "PushEvent":
+                result["push_events_in_window"] += 1
                 push_ts = event.get("created_at", "")
-                for commit in event.get("payload", {}).get("commits", []):
+                raw_commits = event.get("payload", {}).get("commits", [])
+
+                if not raw_commits:
+                    # Private repo or non-distinct commits: fall back to Commits API
+                    raw_commits = await _fetch_repo_commits(
+                        client, repo, dev.github_username, since_iso
+                    )
+
+                for commit in raw_commits:
                     commit["repo"] = repo
-                    commit["pushed_at"] = push_ts  # PushEvent commits lack author.date
-                    events.append(normalize_github_commit(commit, dev_id, org_id))
+                    commit["pushed_at"] = push_ts
+                    ne = normalize_github_commit(commit, dev_id, org_id)
+                    events.append(ne)
+                    msg_text = commit.get("message", commit.get("commit", {}).get("message", ""))
                     result["commits"].append({
-                        "msg": commit.get("message", "")[:80],
+                        "msg": msg_text[:80],
                         "repo": repo,
                         "sha": commit.get("sha", "")[:8],
-                    })
-                    logger.info("commit queued", extra={
-                        "username": dev.github_username, "repo": repo, "msg": commit.get("message", "")[:60],
                     })
 
             elif etype == "PullRequestEvent":
@@ -195,12 +249,10 @@ async def _poll_developer(
                 cr_payload["repo"] = repo
                 events.append(normalize_github_ci_run(cr_payload, dev_id, org_id))
 
-        result["fetched"] = len(events)
+        except Exception as exc:
+            result.setdefault("parse_errors", []).append(str(exc))
 
-    except Exception as exc:
-        result["error"] = f"fetch_exception: {exc}"
-        logger.warning("github events fetch failed", extra={"username": dev.github_username, "error": str(exc)})
-        return result
+    result["fetched"] = len(events)
 
     if not events:
         return result
