@@ -12,19 +12,18 @@ MODEL = "claude-haiku-4-5-20251001"
 def _client() -> anthropic.AsyncAnthropic:
     return anthropic.AsyncAnthropic(api_key=get_settings().anthropic_api_key)
 
-SYSTEM_PROMPT = """You write developer digest summaries the way a senior engineer would describe a colleague's day to the rest of the team.
+SYSTEM_PROMPT = """You write developer digest summaries the way a senior engineer would describe a colleague's recent work to the rest of the team.
 
 Rules:
-- 2-3 sentences per developer
-- Interpret the commits — describe WHAT was built or changed, not just list the commit message text.
-  Example: instead of "committed 'Add styled HTML contact form'", write "built a styled contact form on the frontend"
-- Group related commits into a single work area description. If someone pushed 3 README updates, say "updated the README" once, not three times.
-- Name the repo (from commits_today[].repo) so readers know the context
-- Mention PRs or CI failures only if present — skip the sentence entirely if not
-- Do NOT mention velocity, baselines, pace comparisons, silence hours, or data quality
-- Do NOT pad with phrases like "indicating sustained output", "showing active engagement", "it appears", "seems to be"
+- 3-4 sentences per developer
+- Sentence 1: Describe WHAT was built or changed — interpret the work, don't just re-state the commit message. Say "built a styled contact form" not "committed 'Add styled HTML contact form'". Name the repo.
+- Sentence 2: List the actual commit messages as a reference, formatted like: Commits: "Add styled HTML contact form", "Update README"
+- Sentence 3: If there are PRs, CI failures, or blockers — mention them. Otherwise skip.
+- Sentence 4 (optional): Any relevant follow-up context — what might come next, or what area of the product this affects.
+- Do NOT mention velocity, baselines, pace comparisons, silence hours, or data quality issues
+- Do NOT pad with "indicating sustained output", "showing active engagement", "it appears", "seems to be"
 - If commits_today is empty and prs_opened is empty: write exactly "No activity today."
-- Tone: one engineer telling another what their teammate shipped — specific, human, zero corporate fluff"""
+- Tone: a knowledgeable teammate explaining what got shipped — specific, useful, zero corporate filler"""
 
 
 async def narrative_writer_node(state: AgentState) -> AgentState:
@@ -33,11 +32,12 @@ async def narrative_writer_node(state: AgentState) -> AgentState:
     if not state.get("developer_signals"):
         return {**state, "developer_narratives": {}, "sprint_risk": "No activity data available."}
 
-    user_msg = f"""Summarise each developer's day based on their actual commits and PRs.
+    user_msg = f"""Write a digest summary for each developer based on their recent commits and PRs.
 
-Interpret the work — describe what was built or changed, not just the commit message text.
-Use the repo name from commits_today[].repo and derive meaning from commits_today[].message.
-2-3 sentences max. No velocity, no pace analysis.
+For each developer:
+- Interpret what they built (don't just list commit messages) — use commits_today[].message and commits_today[].repo
+- Then list the raw commit messages on a second sentence: Commits: "msg1", "msg2"
+- 3-4 sentences total. No velocity or pace analysis.
 
 Developer signals:
 {json.dumps(state["developer_signals"], indent=2)}
@@ -48,7 +48,7 @@ Blockers (mention only if present):
 Return JSON only:
 {{
   "developer_summaries": {{
-    "<developer_id>": "<2-3 sentence summary describing what was built>"
+    "<developer_id>": "<3-4 sentence summary>"
   }},
   "sprint_risk": "<1 sentence: CI failures or blockers if any, otherwise 'No blockers.'>"
 }}"""
