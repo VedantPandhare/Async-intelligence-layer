@@ -4,8 +4,9 @@ import hashlib
 import hmac
 import time
 import uuid
+from urllib.parse import parse_qs
 
-from fastapi import APIRouter, Form, Header, HTTPException, Request
+from fastapi import APIRouter, Header, HTTPException, Request
 from sqlalchemy import select
 
 from ..config import get_settings
@@ -48,21 +49,27 @@ async def _org_id_for_team(team_id: str) -> str | None:
 @router.post("/commands")
 async def slack_command(
     request: Request,
-    command: str = Form(...),
-    text: str = Form(default=""),
-    user_id: str = Form(...),
-    team_id: str = Form(...),
-    channel_id: str = Form(...),
     x_slack_signature: str | None = Header(None),
     x_slack_request_timestamp: str | None = Header(None),
 ):
-    # Verify request came from Slack
+    # Read body once — Form() params would consume the stream before body() could read it
+    body = await request.body()
+
     if settings.slack_signing_secret:
-        body = await request.body()
         if not x_slack_signature or not x_slack_request_timestamp:
             raise HTTPException(status_code=401, detail="Missing Slack headers")
         if not _verify_slack_signature(body, x_slack_request_timestamp, x_slack_signature):
             raise HTTPException(status_code=401, detail="Invalid Slack signature")
+
+    # Parse url-encoded form fields from raw bytes
+    fields = parse_qs(body.decode(), keep_blank_values=True)
+
+    def _field(key: str, default: str = "") -> str:
+        return fields.get(key, [default])[0]
+
+    text = _field("text")
+    user_id = _field("user_id")
+    team_id = _field("team_id")
 
     subcommand = text.strip().lower().split()[0] if text.strip() else "help"
     org_id = await _org_id_for_team(team_id)

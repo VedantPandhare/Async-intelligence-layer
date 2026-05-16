@@ -2,6 +2,7 @@
 
 import hashlib
 import hmac
+import json
 import time
 import uuid
 
@@ -59,7 +60,7 @@ async def slack_webhook(
         ):
             raise HTTPException(status_code=401, detail="Invalid Slack signature")
 
-    payload = await request.json()
+    payload = json.loads(body)
     event_type = payload.get("type")
 
     # Slack URL verification challenge (sent once when configuring Events API)
