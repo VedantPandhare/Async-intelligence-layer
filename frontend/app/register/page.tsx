@@ -63,7 +63,7 @@ export default function RegisterPage() {
               <path d="M13 10V3L4 14h7v7l9-11h-7z" />
             </svg>
           </div>
-          <span className="text-sm font-semibold tracking-tight">Async Intel</span>
+          <span className="text-sm font-semibold tracking-tight">StandOut</span>
         </Link>
       </header>
 

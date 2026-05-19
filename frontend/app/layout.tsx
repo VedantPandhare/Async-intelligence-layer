@@ -17,7 +17,7 @@ const instrumentSerif = Instrument_Serif({
 });
 
 export const metadata: Metadata = {
-  title: "Async Intel — Engineering intelligence for async teams",
+  title: "StandOut — Engineering intelligence for async teams",
   description: "Automated standup digests, blocker detection, and coordination signals from your GitHub, Slack, and Jira activity.",
 };
 

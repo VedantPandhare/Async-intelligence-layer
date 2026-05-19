@@ -52,7 +52,7 @@ function Navbar() {
                 <path d="M13 10V3L4 14h7v7l9-11h-7z" />
               </svg>
             </div>
-            <span className="text-white font-semibold tracking-tight text-sm">Async Intel</span>
+            <span className="text-white font-semibold tracking-tight text-sm">StandOut</span>
           </Link>
 
           {/* Desktop */}
@@ -283,7 +283,7 @@ function Footer() {
               <path d="M13 10V3L4 14h7v7l9-11h-7z" />
             </svg>
           </div>
-          <span className="text-xs text-gray-600 font-medium tracking-tight">Async Intel</span>
+          <span className="text-xs text-gray-600 font-medium tracking-tight">StandOut</span>
         </div>
 
         <div className="flex items-center gap-6">

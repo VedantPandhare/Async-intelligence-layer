@@ -173,7 +173,7 @@ function OnboardingContent() {
               <path d="M13 10V3L4 14h7v7l9-11h-7z" />
             </svg>
           </div>
-          <span className="text-sm font-semibold tracking-tight">Async Intel</span>
+          <span className="text-sm font-semibold tracking-tight">StandOut</span>
         </Link>
         <button
           onClick={() => router.push("/dashboard")}
@@ -238,7 +238,7 @@ function OnboardingContent() {
                 <div>
                   <h2 className="text-base font-semibold text-white">Connect GitHub</h2>
                   <p className="text-sm text-slate-500 mt-1">
-                    Async Intel needs read access to your org's commits, pull requests, and CI runs.
+                    StandOut needs read access to your org's commits, pull requests, and CI runs.
                     We never write to your repositories.
                   </p>
                 </div>
@@ -413,7 +413,7 @@ function OnboardingContent() {
                     <div>
                       <h2 className="text-base font-semibold text-white">Connect Slack</h2>
                       <p className="text-sm text-slate-500 mt-1">
-                        Optional — lets Async Intel deliver digests to your team channel and read
+                        Optional — lets StandOut deliver digests to your team channel and read
                         conversation context to detect blockers.
                       </p>
                     </div>
