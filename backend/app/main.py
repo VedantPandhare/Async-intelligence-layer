@@ -24,10 +24,68 @@ _SECURITY_HEADERS = {
 }
 
 
+async def _backfill_developers() -> None:
+    """Create Developer records for any GitHub integration that has none yet."""
+    import uuid
+    from sqlalchemy import select
+    from .core.encryption import decrypt_token
+    from .database import get_db
+    from .models.developer import Developer
+    from .models.integration import Integration
+    import httpx
+
+    try:
+        async with get_db() as db:
+            result = await db.execute(
+                select(Integration).where(Integration.provider == "github")
+            )
+            integrations = result.scalars().all()
+
+        for integration in integrations:
+            org_id = integration.org_id
+            async with get_db() as db:
+                existing = await db.execute(
+                    select(Developer).where(Developer.org_id == org_id)
+                )
+                if existing.scalars().first():
+                    continue  # already has at least one developer
+
+                github_username = (integration.metadata_ or {}).get("github_username", "")
+                if not github_username:
+                    continue
+
+                try:
+                    token = decrypt_token(integration.access_token)
+                    async with httpx.AsyncClient(
+                        headers={"Authorization": f"token {token}", "Accept": "application/vnd.github+json"},
+                        timeout=10,
+                    ) as client:
+                        resp = await client.get("https://api.github.com/user")
+                        gh = resp.json() if resp.status_code == 200 else {}
+                except Exception:
+                    gh = {}
+
+                name = gh.get("name") or github_username
+                email = gh.get("email") or None
+
+                db.add(Developer(
+                    id=uuid.uuid4(),
+                    org_id=org_id,
+                    name=name,
+                    email=email,
+                    github_username=github_username,
+                    is_active=True,
+                ))
+                logger.info("backfilled developer", extra={"org_id": str(org_id), "github_username": github_username})
+    except Exception as exc:
+        logger.warning("developer backfill failed", extra={"error": str(exc)})
+
+
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     configure_logging()
     await init_db()
+    await _backfill_developers()
     scheduler.start()
     logger.info("startup complete", extra={"scheduler_running": scheduler.running})
     yield

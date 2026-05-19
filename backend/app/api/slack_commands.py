@@ -14,7 +14,6 @@ from ..core.logging import get_logger
 from ..database import get_db
 from ..models.developer import Developer
 from ..models.integration import Integration
-from ..models.organization import Organization
 
 router = APIRouter(prefix="/slack", tags=["slack-commands"])
 settings = get_settings()
@@ -70,6 +69,7 @@ async def slack_command(
     text = _field("text")
     user_id = _field("user_id")
     team_id = _field("team_id")
+    channel_id = _field("channel_id")
 
     subcommand = text.strip().lower().split()[0] if text.strip() else "help"
     org_id = await _org_id_for_team(team_id)
@@ -78,7 +78,7 @@ async def slack_command(
         return {"response_type": "ephemeral", "text": "This workspace is not connected. Visit the dashboard to set up your org."}
 
     if subcommand == "trigger":
-        return await _handle_trigger(org_id)
+        return await _handle_trigger(org_id, channel_id)
     elif subcommand == "blockers":
         return await _handle_blockers(org_id)
     elif subcommand == "me":
@@ -87,29 +87,130 @@ async def slack_command(
         return _handle_help()
 
 
-async def _handle_trigger(org_id: str) -> dict:
-    """Kick off the digest pipeline asynchronously and acknowledge immediately."""
+def _build_digest_blocks(result: dict) -> list:
+    """Convert pipeline result into Slack Block Kit blocks."""
+    from datetime import datetime
+    now = datetime.utcnow()
+    # %-d is Linux-only; build the date string manually so it works on Windows too
+    date_str = f"{now.strftime('%A, %B')} {now.day}"
+
+    blocks: list = [
+        {"type": "header", "text": {"type": "plain_text", "text": f"Team Digest — {date_str}"}},
+        {"type": "divider"},
+    ]
+
+    signals = result.get("developer_signals", [])
+    narratives = result.get("developer_narratives", {})
+    blockers = result.get("blockers", [])
+    blocker_map = {b["developer_id"]: b["severity"] for b in blockers}
+
+    if not signals:
+        blocks.append({
+            "type": "section",
+            "text": {"type": "mrkdwn", "text": "_No developer activity recorded for this period._"},
+        })
+    else:
+        for dev in signals:
+            dev_id = dev["developer_id"]
+            name = dev["developer_name"]
+            narrative = narratives.get(dev_id, "No activity today.")
+
+            severity = blocker_map.get(dev_id)
+            if severity == "critical":
+                status = "BLOCKER"
+            elif severity in ("high", "medium"):
+                status = "Attention needed"
+            else:
+                status = ""
+
+            commit_count = len(dev.get("commits_today", []))
+            pr_count = len(dev.get("prs_opened", []))
+            meta_parts = []
+            if commit_count:
+                meta_parts.append(f"{commit_count} commit{'s' if commit_count != 1 else ''}")
+            if pr_count:
+                meta_parts.append(f"{pr_count} PR{'s' if pr_count != 1 else ''}")
+            if status:
+                meta_parts.append(f"*{status}*")
+            meta_str = "   |   ".join(meta_parts)
+
+            header_line = f"*{name}*"
+            if meta_str:
+                header_line += f"   {meta_str}"
+
+            blocks.append({
+                "type": "section",
+                "text": {"type": "mrkdwn", "text": f"{header_line}\n{narrative}"},
+            })
+            blocks.append({"type": "divider"})
+
+    sprint_risk = result.get("sprint_risk", "")
+    if sprint_risk:
+        blocks.append({
+            "type": "context",
+            "elements": [{"type": "mrkdwn", "text": f"Sprint health   |   {sprint_risk}"}],
+        })
+
+    return blocks
+
+
+async def _handle_trigger(org_id: str, channel_id: str) -> dict:
+    """Kick off the digest pipeline asynchronously and post result to the invoking channel."""
     import asyncio
+    from slack_sdk.web.async_client import AsyncWebClient
     from ..agents.graph import pipeline
     from ..agents.persist import persist_pipeline_results
     from ..core.analytics import track
+    from ..core.encryption import decrypt_token
+    from ..models.integration import Integration
     from datetime import date
 
     async def _run():
-        state = {
-            "org_id": org_id, "digest_date": date.today().isoformat(),
-            "developer_signals": [], "blockers": [], "conflicts": [],
-            "developer_narratives": {}, "sprint_risk": "",
-            "final_digest": None, "errors": [], "should_intervene": False,
-        }
-        result = await pipeline.ainvoke(state)
-        await persist_pipeline_results(result)
-        track("digest_generated", org_id, {"triggered_by": "slack_command"})
+        try:
+            # Poll GitHub first so signal_collector has fresh data
+            from ..ingestion.github_poller import poll_github_for_org
+            await poll_github_for_org(org_id, since_hours=168)
+
+            state = {
+                "org_id": org_id, "digest_date": date.today().isoformat(),
+                "developer_signals": [], "blockers": [], "conflicts": [],
+                "developer_narratives": {}, "sprint_risk": "",
+                "final_digest": None, "errors": [], "should_intervene": False,
+            }
+            result = await pipeline.ainvoke(state)
+            await persist_pipeline_results(result)
+            track("digest_generated", org_id, {"triggered_by": "slack_command"})
+
+            blocks = _build_digest_blocks(result)
+            fallback_text = result.get("final_digest") or "Team digest — see blocks"
+
+            async with get_db() as db:
+                int_result = await db.execute(
+                    select(Integration).where(
+                        Integration.org_id == uuid.UUID(org_id),
+                        Integration.provider == "slack",
+                    )
+                )
+                integration = int_result.scalar_one_or_none()
+
+            token = (
+                decrypt_token(integration.access_token)
+                if integration and integration.access_token
+                else settings.slack_bot_token
+            )
+            client = AsyncWebClient(token=token)
+            await client.chat_postMessage(
+                channel=channel_id,
+                text=fallback_text,
+                blocks=blocks,
+            )
+        except Exception as exc:
+            logger.warning("trigger pipeline failed", extra={"org_id": org_id, "error": str(exc)})
 
     asyncio.create_task(_run())
     return {
         "response_type": "ephemeral",
-        "text": "Pipeline triggered. Digest will appear in your channel shortly.",
+        "text": "⏳ Running pipeline — digest will be posted here in ~30 seconds.",
     }
 
 
