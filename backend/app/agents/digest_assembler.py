@@ -8,7 +8,7 @@ def digest_assembler_node(state: AgentState) -> AgentState:
     date_str = f"{now.strftime('%A, %B')} {now.day}"
 
     sections: list[str] = []
-    sections.append(f"## 🗓 Team Digest — {date_str}")
+    sections.append(f"## Team Digest — {date_str}")
 
     signals = state.get("developer_signals", [])
     narratives = state.get("developer_narratives", {})
@@ -25,14 +25,11 @@ def digest_assembler_node(state: AgentState) -> AgentState:
 
             severity = blocker_map.get(dev_id)
             if severity == "critical":
-                icon = "🔴"
-            elif severity == "high":
-                icon = "🟠"
-            elif severity == "medium":
-                icon = "🟡"
+                status_label = "  **BLOCKER**"
+            elif severity in ("high", "medium"):
+                status_label = "  **Attention needed**"
             else:
-                commits = dev.get("commits_today", [])
-                icon = "✅" if commits else "⚪"
+                status_label = ""
 
             commit_count = len(dev.get("commits_today", []))
             pr_count = len(dev.get("prs_opened", []))
@@ -41,20 +38,22 @@ def digest_assembler_node(state: AgentState) -> AgentState:
                 meta_parts.append(f"{commit_count} commit{'s' if commit_count != 1 else ''}")
             if pr_count:
                 meta_parts.append(f"{pr_count} PR{'s' if pr_count != 1 else ''} opened")
-            meta = f"  \n*{', '.join(meta_parts)}*" if meta_parts else ""
+            if not commit_count and not pr_count:
+                meta_parts.append("Idle")
+            meta = f"  \n*{', '.join(meta_parts)}*{status_label}" if meta_parts else status_label
 
-            dev_blocks.append(f"### {icon} {dev['developer_name']}\n{narrative}{meta}")
+            dev_blocks.append(f"### {dev['developer_name']}\n{narrative}{meta}")
 
         sections.append("\n\n---\n\n".join(dev_blocks))
 
     conflicts = state.get("conflicts", [])
     if conflicts:
-        conflict_lines = ["### ⚠️ Coordination Needed"]
+        conflict_lines = ["### Coordination Needed"]
         for c in conflicts:
             overlap = c.get("files_or_services", [])[:3]
             overlap_str = ", ".join(f"`{f}`" for f in overlap)
             conflict_lines.append(
-                f"**{c['developer_a']}** × **{c['developer_b']}**: {c['risk']}"
+                f"**{c['developer_a']}** x **{c['developer_b']}**: {c['risk']}"
                 + (f" — {overlap_str}" if overlap_str else "")
             )
         sections.append("\n".join(conflict_lines))
