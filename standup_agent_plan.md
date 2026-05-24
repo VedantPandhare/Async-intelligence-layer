@@ -1144,21 +1144,6 @@ Organization
 
 ---
 
-## 12. Cost Estimation
-
-| Component           | Per 10-dev team/day | Per 100-dev team/day |
-|---------------------|---------------------|----------------------|
-| Claude Sonnet       | ~$0.12              | ~$0.95               |
-| OpenAI Embeddings   | ~$0.002             | ~$0.015              |
-| Qdrant Cloud (free) | $0                  | $0                   |
-| Redis (managed)     | ~$0.02              | ~$0.05               |
-| Postgres (managed)  | ~$0.03              | ~$0.10               |
-| **Total/day**       | **~$0.17**          | **~$1.10**           |
-| **Total/month**     | **~$5**             | **~$33**             |
-
-At $15/seat/month pricing → margins are exceptional at any scale.
-
----
 
 ## 13. Week-by-Week Build Plan
 
