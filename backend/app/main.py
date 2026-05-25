@@ -128,7 +128,7 @@ async def security_headers(request: Request, call_next) -> Response:
 app.include_router(router)
 
 
-@app.get("/health")
+@app.api_route("/health", methods=["GET", "HEAD"])
 async def health():
     from datetime import datetime, timezone
     checks: dict[str, str] = {}
