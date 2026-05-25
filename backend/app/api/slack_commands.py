@@ -45,6 +45,73 @@ async def _org_id_for_team(team_id: str) -> str | None:
     return None
 
 
+@router.post("/events")
+async def slack_events(
+    request: Request,
+    x_slack_signature: str | None = Header(None),
+    x_slack_request_timestamp: str | None = Header(None),
+):
+    import json as _json
+    body = await request.body()
+    payload = _json.loads(body) if body else {}
+
+    # url_verification must be answered before signature check
+    if payload.get("type") == "url_verification":
+        return {"challenge": payload["challenge"]}
+
+    if settings.slack_signing_secret:
+        if not x_slack_signature or not x_slack_request_timestamp:
+            raise HTTPException(status_code=401, detail="Missing Slack headers")
+        if not _verify_slack_signature(body, x_slack_request_timestamp, x_slack_signature):
+            raise HTTPException(status_code=401, detail="Invalid Slack signature")
+
+    if payload.get("type") != "event_callback":
+        return {"status": "ignored"}
+
+    team_id = payload.get("team_id", "")
+    org_id = await _org_id_for_team(team_id)
+    if not org_id:
+        return {"status": "unknown_workspace"}
+
+    event = payload.get("event", {})
+    if event.get("type") != "message" or event.get("subtype"):
+        return {"status": "ok"}
+
+    slack_user_id = event.get("user")
+    if not slack_user_id:
+        return {"status": "ok"}
+
+    from sqlalchemy import select as _select
+    from ..models.developer import Developer
+    from ..ingestion.normalizer import normalize_slack_message, store_event
+    from ..ingestion.embedder import embed_and_store_event
+    import uuid as _uuid
+
+    async with get_db() as db:
+        result = await db.execute(
+            _select(Developer).where(
+                Developer.org_id == _uuid.UUID(org_id),
+                Developer.slack_user_id == slack_user_id,
+                Developer.is_active.is_(True),
+            )
+        )
+        dev = result.scalar_one_or_none()
+
+    if not dev:
+        return {"status": "ok"}
+
+    raw = {**event, "channel_name": event.get("channel", "unknown")}
+    async with get_db() as db:
+        normalized = normalize_slack_message(raw, str(dev.id), org_id)
+        record = await store_event(normalized, db)
+        try:
+            await embed_and_store_event(normalized, record.id, db)
+        except Exception as exc:
+            logger.warning("slack embed failed", extra={"error": str(exc)})
+
+    return {"status": "ok"}
+
+
 @router.post("/commands")
 async def slack_command(
     request: Request,
